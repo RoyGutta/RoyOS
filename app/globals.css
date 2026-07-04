@@ -1,0 +1,227 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   RoyOS Console — design tokens
+   A living-system control panel: deep ink field, phosphor-teal signal,
+   monospace-forward vernacular (the agent speaks in files and JSON).
+   ========================================================================== */
+@theme {
+  --color-bg: #090d13;
+  --color-bg2: #0b1017;
+  --color-panel: #101823;
+  --color-panel2: #0d141d;
+  --color-line: #1b2431;
+  --color-line2: #263242;
+  --color-ink: #cdd7e3;
+  --color-dim: #8493a6;
+  --color-muted: #566277;
+  --color-accent: #4dd8c0; /* phosphor teal — the system's pulse */
+  --color-online: #3fb950;
+  --color-active: #e3a008;
+  --color-offline: #f85149;
+
+  --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+}
+
+/* ---- base ---------------------------------------------------------------- */
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* faint console grid so the field never feels flat black */
+  background-image:
+    radial-gradient(circle at 12% -10%, rgba(77, 216, 192, 0.05), transparent 40%),
+    linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px;
+}
+
+::selection {
+  background: rgba(77, 216, 192, 0.25);
+}
+
+/* thin dark scrollbars everywhere */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line2);
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- reusable console primitives ---------------------------------------- */
+.eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-dim);
+  font-weight: 500;
+}
+
+.panel {
+  position: relative;
+  background:
+    linear-gradient(180deg, var(--color-panel) 0%, var(--color-panel2) 100%);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+}
+/* control-center corner ticks */
+.panel::before,
+.panel::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-color: var(--color-line2);
+  pointer-events: none;
+}
+.panel::before {
+  top: 8px;
+  left: 8px;
+  border-top: 1px solid;
+  border-left: 1px solid;
+}
+.panel::after {
+  bottom: 8px;
+  right: 8px;
+  border-bottom: 1px solid;
+  border-right: 1px solid;
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+/* status dot with a soft breathing halo */
+.dot {
+  --c: var(--color-muted);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 0 0 var(--c);
+  flex: none;
+}
+.dot--online {
+  --c: var(--color-online);
+}
+.dot--active {
+  --c: var(--color-active);
+}
+.dot--offline {
+  --c: var(--color-offline);
+}
+.dot--live {
+  animation: pulse 1.8s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* carrier line under the header — sweeps while the loop is alive */
+.carrier {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: var(--color-line);
+}
+.carrier--live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 32%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent),
+    transparent
+  );
+  animation: sweep 2.6s linear infinite;
+}
+@keyframes sweep {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(420%);
+  }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-line2);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--color-dim);
+  white-space: nowrap;
+}
+
+.row-enter {
+  animation: rowIn 0.35s ease both;
+}
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hover-line:hover {
+  background: rgba(77, 216, 192, 0.06);
+}
+
+a,
+button {
+  color: inherit;
+}
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot--live,
+  .carrier--live::after,
+  .row-enter {
+    animation: none !important;
+  }
+}
