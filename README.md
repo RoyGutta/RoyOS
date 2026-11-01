@@ -58,14 +58,6 @@ cp .env.local.example .env.local
 #   edit .env.local only if your vault path or Ollama host differ
 ```
 
-`.env.local`:
-
-```env
-ROYOS_VAULT=/Users/roygutta/Documents/RoyOS
-OLLAMA_HOST=http://localhost:11434
-ROYOS_HEARTBEAT_SECONDS=45
-```
-
 ## Run
 
 ```bash
