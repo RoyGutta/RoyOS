@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -6,7 +7,7 @@ import path from "node:path";
  */
 
 export const VAULT =
-  process.env.ROYOS_VAULT?.trim() || "/Users/roygutta/Documents/RoyOS";
+  process.env.ROYOS_VAULT?.trim() || path.join(os.homedir(), "Documents", "RoyOS");
 
 /**
  * The live RoyOS vault (~/Documents/RoyOS) is pre-cutover and OFF-LIMITS — not
@@ -15,7 +16,7 @@ export const VAULT =
  * view it deliberately, set ROYOS_VAULT_AUTHORIZED=1 (or point ROYOS_VAULT at
  * the runtime's scratch vault). Decision 2026-10-11.
  */
-const LIVE_VAULT = "/Users/roygutta/Documents/RoyOS";
+const LIVE_VAULT = path.join(os.homedir(), "Documents", "RoyOS");
 export const VAULT_BLOCKED =
   path.resolve(VAULT) === LIVE_VAULT || path.resolve(VAULT).startsWith(LIVE_VAULT + path.sep)
     ? process.env.ROYOS_VAULT_AUTHORIZED !== "1"

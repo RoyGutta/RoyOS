@@ -48,7 +48,7 @@ The dashboard was built against the **real** RoyOS files, not assumptions:
 Requires **Node.js 18.18+** (Node 20+ recommended).
 
 ```bash
-cd /Users/roygutta/Documents/royos-dashboard
+cd ~/Developer/royos-dashboard
 
 # 1. install deps
 npm install
