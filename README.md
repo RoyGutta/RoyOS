@@ -2,7 +2,7 @@
 
 A **local-first, read-only** dashboard that visualizes the RoyOS autonomous agent
 in real time: an AI system running on your machine that continuously modifies its
-own workspace (the Obsidian vault at `/Users/roygutta/Documents/RoyOS`).
+own workspace (the Obsidian vault).
 
 It reads the same files `08 AI/Agents/orchestrator.js` writes — and **never writes,
 moves, or deletes anything**. It also asks Ollama directly which model is loaded.
