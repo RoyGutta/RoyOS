@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import { PREVIEW_MAX_BYTES } from "@/lib/config";
 import { resolveInVault } from "@/lib/fs";
 import type { FilePayload } from "@/lib/types";
+import { redact } from "@/lib/jarvis/redact";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -23,6 +24,17 @@ export async function GET(req: NextRequest) {
   const abs = resolveInVault(rel);
   if (!abs) {
     return NextResponse.json({ error: "Path outside vault" }, { status: 403 });
+  }
+  if (rel.split(/[\\/]/).some((seg) => seg.startsWith(".")) || /\.env|\.secrets|\.voice_inbox|recipients\.local/i.test(rel)) {
+    return NextResponse.json({ error: "Hidden and secret files are not previewed" }, { status: 403 });
+  }
+  // symlinks must not lead outside the vault either
+  try {
+    const real = await fsp.realpath(abs);
+    const root = await fsp.realpath(resolveInVault("") ?? abs);
+    if (real !== root && !real.startsWith(root + "/")) return NextResponse.json({ error: "Path outside vault" }, { status: 403 });
+  } catch {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   let stat;
@@ -53,8 +65,10 @@ export async function GET(req: NextRequest) {
   }
 
   const truncated = stat.size > PREVIEW_MAX_BYTES;
-  const buf = await fsp.readFile(abs);
-  const slice = truncated ? buf.subarray(0, PREVIEW_MAX_BYTES) : buf;
+  // read only the preview window, never the whole file
+  const fh = await fsp.open(abs, "r");
+  const slice = Buffer.alloc(Math.min(stat.size, PREVIEW_MAX_BYTES));
+  try { await fh.read(slice, 0, slice.length, 0); } finally { await fh.close(); }
   // If a null byte slipped through an unknown extension, treat as binary.
   const hasNull = slice.includes(0);
 
@@ -64,7 +78,7 @@ export async function GET(req: NextRequest) {
     mtime: stat.mtime.toISOString(),
     binary: hasNull,
     truncated,
-    content: hasNull ? "" : slice.toString("utf-8"),
+    content: hasNull ? "" : redact(slice.toString("utf-8")),  // a pasted key inside a note never reaches the browser
   };
   return NextResponse.json(payload, {
     headers: { "Cache-Control": "no-store" },

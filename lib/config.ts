@@ -8,6 +8,21 @@ import path from "node:path";
 export const VAULT =
   process.env.ROYOS_VAULT?.trim() || "/Users/roygutta/Documents/RoyOS";
 
+/**
+ * The live RoyOS vault (~/Documents/RoyOS) is pre-cutover and OFF-LIMITS — not
+ * even for reading — until Roy authorises a cutover. Every vault read in this
+ * app goes through lib/fs.ts, which refuses while VAULT_BLOCKED is true. To
+ * view it deliberately, set ROYOS_VAULT_AUTHORIZED=1 (or point ROYOS_VAULT at
+ * the runtime's scratch vault). Decision 2026-10-11.
+ */
+const LIVE_VAULT = "/Users/roygutta/Documents/RoyOS";
+export const VAULT_BLOCKED =
+  path.resolve(VAULT) === LIVE_VAULT || path.resolve(VAULT).startsWith(LIVE_VAULT + path.sep)
+    ? process.env.ROYOS_VAULT_AUTHORIZED !== "1"
+    : false;
+export const VAULT_BLOCKED_REASON =
+  "The live RoyOS vault is pre-cutover and unauthorised for reading. Set ROYOS_VAULT_AUTHORIZED=1 only when Roy authorises the cutover, or point ROYOS_VAULT at the runtime's scratch vault.";
+
 export const OLLAMA_HOST =
   process.env.OLLAMA_HOST?.trim() || "http://localhost:11434";
 

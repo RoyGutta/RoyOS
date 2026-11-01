@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Tidefable mark">
+  <defs><clipPath id="disc"><circle cx="128" cy="128" r="128"/></clipPath></defs>
+  <rect width="256" height="256" rx="64" fill="#0E1B33"/>
+  <g clip-path="url(#disc)">
+    <path d="M -8 152 C 40 152, 66 104, 106 104 C 146 104, 158 142, 200 142 C 230 142, 246 132, 264 134 L 264 264 L -8 264 Z" fill="#F4F1EA"/>
+    <path d="M -8 118 C 40 118, 66 72, 106 72 C 146 72, 158 110, 200 110 C 230 110, 246 100, 264 102" fill="none" stroke="#F4F1EA" stroke-width="9" stroke-linecap="round" opacity="0.5"/>
+  </g>
+  <circle cx="186" cy="52" r="13" fill="#F2B544"/>
+  
+</svg>

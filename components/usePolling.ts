@@ -21,13 +21,18 @@ export function usePolling<T>(url: string, intervalMs = 3000): PollState<T> {
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const alive = useRef(true);
+  // Monotonic guard: a slow response from an OLDER request must never overwrite a newer one.
+  const issued = useRef(0);
+  const applied = useRef(0);
 
   const load = useCallback(async () => {
+    const mine = ++issued.current;
     try {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as T;
-      if (!alive.current) return;
+      if (!alive.current || mine < applied.current) return;
+      applied.current = mine;
       setData(json);
       setError(null);
       setUpdatedAt(Date.now());

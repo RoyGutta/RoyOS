@@ -4,10 +4,12 @@
   "private": true,
   "description": "Local-first control panel for the RoyOS autonomous agent.",
   "scripts": {
-    "dev": "next dev -p 4318",
+    "dev": "next dev -H 127.0.0.1 -p 4318",
     "build": "next build",
-    "start": "next start -p 4318",
-    "lint": "next lint"
+    "start": "next start -H 127.0.0.1 -p 4318",
+    "lint": "next lint",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/test-hooks.mjs --test \"tests/**/*.test.ts\"",
+    "test:e2e-hosted": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/test-hooks.mjs scripts/e2e-hosted.mjs"
   },
   "dependencies": {
     "next": "^15.1.6",

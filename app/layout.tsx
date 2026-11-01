@@ -1,10 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import Nav from "@/components/Nav";
+import { isHosted } from "@/lib/continuous/mode";
 
 export const metadata: Metadata = {
-  title: "RoyOS — Control Center",
+  title: "Jarvis — Assistant",
   description:
-    "Local control panel for the RoyOS autonomous agent. Read-only view of a system continuously modifying its own workspace.",
+    "Local command center for Jarvis: conversation, runs, approvals, leads, business, content and system health. Reads local files; nothing leaves the machine.",
 };
 
 export const viewport: Viewport = {
@@ -20,7 +22,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <a className="skip-link" href="#main">Skip to main content</a>
+        <div className="p-3 sm:p-5 pb-0 max-w-[1500px] mx-auto">
+          <Nav hosted={isHosted()} />
+        </div>
+        <main id="main" tabIndex={-1}>{children}</main>
+      </body>
     </html>
   );
 }

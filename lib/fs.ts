@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   VAULT,
+  VAULT_BLOCKED,
   TREE_IGNORE,
   TREE_MAX_DEPTH,
   TREE_MAX_ENTRIES,
@@ -17,6 +18,7 @@ import type { TreeNode } from "./types";
 
 /** Read a UTF-8 file, returning null if it does not exist / cannot be read. */
 export async function readTextSafe(file: string): Promise<string | null> {
+  if (VAULT_BLOCKED) return null; // the live vault is unauthorised: never read it
   try {
     return await fsp.readFile(file, "utf-8");
   } catch {
@@ -37,6 +39,7 @@ export async function readJsonSafe<T>(file: string, fallback: T): Promise<T> {
 
 /** mtime as ISO string, or null. */
 export async function mtimeIso(file: string): Promise<string | null> {
+  if (VAULT_BLOCKED) return null;
   try {
     const st = await fsp.stat(file);
     return st.mtime.toISOString();
@@ -51,6 +54,7 @@ export async function mtimeIso(file: string): Promise<string | null> {
  * This is the security boundary for the file-preview route.
  */
 export function resolveInVault(relPath: string): string | null {
+  if (VAULT_BLOCKED) return null; // unauthorised vault: every path resolves to "outside"
   const normalized = path
     .normalize(relPath)
     .replace(/^([/\\])+/, ""); // strip leading slashes so it can't be absolute
@@ -80,6 +84,9 @@ export async function buildTree(): Promise<{
 }> {
   const vaultRoot = path.resolve(VAULT);
   const ctx: WalkCtx = { count: 0, files: 0, dirs: 0 };
+  if (VAULT_BLOCKED) {
+    return { root: { name: "vault (unauthorised)", path: "", type: "dir", size: 0, mtime: null, children: [] }, fileCount: 0, dirCount: 0 };
+  }
 
   async function walk(absDir: string, depth: number): Promise<TreeNode[]> {
     if (depth > TREE_MAX_DEPTH || ctx.count > TREE_MAX_ENTRIES) return [];
