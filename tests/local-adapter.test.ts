@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { NOT_INSTALLED, localApply, localStatus, sanitizeLocalSnapshot, setRunnerForTests, type RunResult } from "../lib/continuous/adapters/local";
+import { NOT_INSTALLED, localApply, localStatus, redactLocalText, sanitizeLocalSnapshot, setRunnerForTests, type RunResult } from "../lib/continuous/adapters/local";
 import { buildCommand } from "../lib/continuous/commands";
 import { randomHex } from "../lib/continuous/crypto";
 import { hostedSnapshot } from "./helpers";
@@ -64,4 +64,34 @@ test("local snapshot sanitizer: enforces types and caps text; control characters
   assert.equal(s.supervisor.usage.status, "unknown");
   assert.equal(s.supervisor.runsToday, 0);
   assert.equal(sanitizeLocalSnapshot({ v: 2 }), null);
+});
+
+test("DC-10: local-mode error text never carries an absolute path or a stack trace", async () => {
+  const traceback = [
+    "Traceback (most recent call last):",
+    '  File "/Users/roy/Library/Application Support/Jarvis/supervisor/bin/supervisor.py", line 12, in <module>',
+    "    main()",
+    "RuntimeError: cannot write /Users/roy/Library/Application Support/Jarvis/control.json (log at /private/var/folders/zz/T/sv.log)",
+  ].join("\n");
+  setRunnerForTests(async () => ({ code: 1, stdout: "", stderr: traceback }));
+  try {
+    const s = await localStatus();
+    assert.equal(s.error, "supervisor.py link-status failed (exit 1): RuntimeError: cannot write ~/Library/Application Support/Jarvis/control.json (log at <path>)");
+  } finally { setRunnerForTests(null); }
+  const cmd = buildCommand({ verb: "on", channel: "local", installId, cmdKeyHex: randomHex(32) });
+  setRunnerForTests(async () => ({ code: 1, stdout: "", stderr: traceback }));
+  try {
+    const r = await localApply(cmd);
+    assert.equal(r.ok, false);
+    assert.doesNotMatch(r.message, /\/Users|Traceback|File "/);
+    assert.match(r.message, /RuntimeError: cannot write ~\/Library/);
+  } finally { setRunnerForTests(null); }
+  setRunnerForTests(async () => ({ code: 0, stdout: JSON.stringify({ id: cmd.id, ok: false, message: "control.json is held by /Users/roy/Library/x and /opt/homebrew/bin/python3; see\n/var/log/jarvis.log" }), stderr: "" }));
+  try {
+    const r = await localApply(cmd);
+    assert.equal(r.message, "control.json is held by ~/Library/x and <path>; see <path>", "the Mac's own message is redacted too");
+  } finally { setRunnerForTests(null); }
+  assert.equal(redactLocalText("plain text, on/off, 1/2 and N/A stay"), "plain text, on/off, 1/2 and N/A stay");
+  assert.equal(redactLocalText("x".repeat(300)).length, 200);
+  assert.equal(redactLocalText(""), "");
 });

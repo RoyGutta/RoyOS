@@ -5,6 +5,7 @@
  *   JARVIS_HOSTED=1   the dashboard runs on Vercel: lockdown, TOTP, durable store required (fail closed).
  *   RELAY_STAGING=1   lets the FILE store back a hosted build, but only on a loopback host (local staging/tests).
  *   DASHBOARD_PORT    the one port the local dashboard answers on (LP-6); default 4318.
+ *   JARVIS_CANONICAL_HOST  hosted mode answers this one Host only (DC-7), e.g. `jarvis-xyz.vercel.app`.
  */
 export function isHosted(): boolean {
   return process.env.JARVIS_HOSTED === "1";
@@ -31,6 +32,23 @@ export function localHostAllowed(host: string | null | undefined): boolean {
 
 export function isLoopbackHost(host: string | null | undefined): boolean {
   return /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i.test((host ?? "").trim());
+}
+
+export function canonicalHost(): string {
+  return (process.env.JARVIS_CANONICAL_HOST ?? "").trim().toLowerCase();
+}
+
+/**
+ * DC-7: a hosted deployment serves exactly one Host. With JARVIS_CANONICAL_HOST set, any other Host — an immutable
+ * `*.vercel.app` deployment URL still carrying pre-rotation keys, a preview, a rebound name — is 421. Unset, only
+ * loopback staging is served and a public Host fails closed (503 naming the variable).
+ */
+export function hostedHostCheck(hostHeader: string | null | undefined): { ok: true } | { ok: false; status: number; error: string } {
+  const host = (hostHeader ?? "").trim().toLowerCase();
+  const want = canonicalHost();
+  if (want) return host === want ? { ok: true } : { ok: false, status: 421, error: "this deployment answers only on its canonical host" };
+  if (isLoopbackHost(host)) return { ok: true };
+  return { ok: false, status: 503, error: "JARVIS_CANONICAL_HOST is not set; refusing to serve on a public host" };
 }
 
 export type StoreChoice =

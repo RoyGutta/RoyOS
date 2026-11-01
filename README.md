@@ -130,7 +130,40 @@ Environment variables (names only; values come from `supervisor.py link-keys --v
 | `DASHBOARD_PASS_HASH` | `scrypt$N$r$p$salt$hash` from `supervisor.py dashboard-passcode` |
 | `TOTP_SECRET` | base32 authenticator secret enrolled by `dashboard-passcode` |
 | `SESSION_KEY` | signs the session cookie |
+| `JARVIS_CANONICAL_HOST` | the ONE Host the hosted app answers, e.g. `jarvis-xyz.vercel.app`; any other Host is 421, and a public Host with it unset is 503 |
+| `VERCEL` | set to `1` by Vercel itself; the per-client login lockout trusts `x-real-ip` only when it is |
 | `RELAY_STAGING`, `RELAY_FILE_DIR` | staging/tests only |
+
+### Hosting controls on Roy's side
+
+The code bounds what it can (store reads per request, failures-only counting, atomic counters), but two controls are
+account settings, not code, and hosting is not safe without them:
+
+- **Vercel Firewall rate-limit rule on `POST /api/auth/login`.** Login is the only unauthenticated route that reaches
+  the durable store and runs scrypt (about 100 ms of CPU each). The app itself pauses sign-in after 50 FAILED attempts
+  in an hour and then answers a wrong attempt with ONE store read and no write — but it cannot bound CPU or request
+  volume. Add a rule such as 10 requests per minute per IP on that path and check that Roy's plan includes it.
+- **Upstash monthly budget cap.** Set a monthly spend cap (or stay on Free and accept that the hosted app returns 503
+  everywhere once the 500K-command month is used up; the Mac, local mode and existing sessions are unaffected).
+
+**Store budget (commands, which is what Upstash bills).** The Mac at the 30 s cadence makes 2 requests per cycle
+(`report`: nonce + snapshot = 2 commands; `commands`: nonce + log read = 2 commands), so 4 commands per cycle:
+2,880 cycles a day → 11,520 a day → **about 350K a month**. The browser's status poll costs 2 commands (one MGET for
+session + snapshot, one LRANGE of the command log), runs every 20 s only while the tab is visible, and stops while it is
+hidden: **360 commands per open-tab hour**. A command costs about 5 and its ack about 4. Inside Upstash Free's 500K
+that leaves roughly 150K for the browser — about **400 open-tab hours a month**, or 13 a day. (A Lua `EVAL` and each
+command inside a `/multi-exec` transaction are counted as one command each here; confirm against Upstash's current
+billing when choosing the plan.)
+
+**Host pin and key rotation.** Set `JARVIS_CANONICAL_HOST` to the production alias (e.g. `jarvis-xyz.vercel.app`).
+Immutable `*.vercel.app` deployment URLs keep the environment they were built with, so after
+`supervisor.py link-keys --rotate` on the Mac: re-run `link-keys --vercel`, **redeploy**, and **delete the old
+deployments** in the Vercel dashboard (they would otherwise keep answering with the old keys on their own URLs — the
+pin refuses them with 421, deleting them removes them). Old sessions die with the rotated `SESSION_KEY`.
+
+**Client identity.** The per-client lockout buckets by `x-real-ip` only when `VERCEL=1` (Vercel overwrites that
+header on every request); anywhere else the header is not trusted and every client shares one bucket. IPv6 clients
+are bucketed by their /64, IPv4-mapped addresses by their IPv4.
 
 Tests: `npm test` (Node's own runner over the TypeScript sources). Hosted end-to-end on loopback with the file store,
 after `npm run build`: `npm run test:e2e-hosted` (starts a production server on a free port, plays browser and Mac,

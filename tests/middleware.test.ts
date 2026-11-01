@@ -5,7 +5,7 @@ import { middleware } from "../middleware";
 import { randomHex } from "../lib/continuous/crypto";
 import { signSessionId } from "../lib/continuous/session";
 
-const ENV_KEYS = ["JARVIS_HOSTED", "RELAY_STORE", "RELAY_STAGING", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN", "SESSION_KEY", "DASHBOARD_PORT"];
+const ENV_KEYS = ["JARVIS_HOSTED", "JARVIS_CANONICAL_HOST", "RELAY_STORE", "RELAY_STAGING", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN", "SESSION_KEY", "DASHBOARD_PORT"];
 function withEnv(env: Record<string, string>, fn: () => Promise<void>) {
   return async () => {
     const saved: Record<string, string | undefined> = {};
@@ -16,7 +16,7 @@ function withEnv(env: Record<string, string>, fn: () => Promise<void>) {
 }
 const req = (url: string, headers: Record<string, string> = {}) => new NextRequest(url, { headers: { host: new URL(url).host, ...headers } });
 const passes = (res: Response) => res.status === 200 && res.headers.get("x-middleware-next") === "1";
-const HOSTED = { JARVIS_HOSTED: "1", UPSTASH_REDIS_REST_URL: "https://example.upstash.io", UPSTASH_REDIS_REST_TOKEN: "t" };
+const HOSTED = { JARVIS_HOSTED: "1", JARVIS_CANONICAL_HOST: "jarvis.example", UPSTASH_REDIS_REST_URL: "https://example.upstash.io", UPSTASH_REDIS_REST_TOKEN: "t" };
 
 test("hosted lockdown: every existing file-reading API and page is 404; only the continuous surface is served", withEnv(HOSTED, async () => {
   for (const p of ["/api/file?path=x", "/api/runs", "/api/state", "/api/tree", "/api/supervisor", "/api/jarvis/ask", "/system", "/runs", "/leads", "/robots.txt", "/continuous/extra"]) {
@@ -51,9 +51,38 @@ test("hosted: unauthenticated page → /login, unauthenticated /api/continuous �
   assert.equal(login.status, 307); assert.match(login.headers.get("location") ?? "", /\/continuous$/);
 }));
 
-test("hosted fail-closed: with no durable store configured every route is 503, including the relay and the login page", withEnv({ JARVIS_HOSTED: "1" }, async () => {
-  for (const p of ["/login", "/continuous", "/api/link/report", "/api/auth/login", "/api/file"]) assert.equal((await middleware(req(`https://jarvis.example${p}`))).status, 503, p);
+test("hosted fail-closed: with no durable store configured every route is 503, including the relay and the login page", withEnv({ JARVIS_HOSTED: "1", JARVIS_CANONICAL_HOST: "jarvis.example" }, async () => {
+  for (const p of ["/login", "/continuous", "/api/link/report", "/api/auth/login", "/api/file"]) {
+    const res = await middleware(req(`https://jarvis.example${p}`));
+    assert.equal(res.status, 503, p);
+    assert.match(((await res.json()) as { error: string }).error, /durable store/);
+  }
 }));
+
+test("DC-7: hosted mode answers only JARVIS_CANONICAL_HOST — any other Host is 421; unset, a public Host is 503 and loopback staging still serves", async () => {
+  await withEnv({ ...HOSTED, SESSION_KEY: randomHex(32) }, async () => {
+    assert.ok(passes(await middleware(req("https://jarvis.example/login"))));
+    assert.ok(passes(await middleware(req("https://jarvis.example/login", { host: "JARVIS.example" }))), "Host compared case-insensitively");
+    for (const host of ["jarvis-git-main-roy.vercel.app", "jarvis-abc123.vercel.app", "evil.example", "jarvis.example:8443", ""]) {
+      for (const p of ["/login", "/", "/api/auth/login", "/api/link/report", "/api/continuous/status", "/continuous"]) {
+        const res = await middleware(req(`https://jarvis.example${p}`, { host }));
+        assert.equal(res.status, 421, `${host || "(no host)"} ${p}`);
+        assert.equal(res.headers.get("x-frame-options"), "DENY");
+      }
+    }
+  })();
+  await withEnv({ JARVIS_HOSTED: "1", UPSTASH_REDIS_REST_URL: "https://example.upstash.io", UPSTASH_REDIS_REST_TOKEN: "t" }, async () => {
+    const res = await middleware(req("https://jarvis.example/login"));
+    assert.equal(res.status, 503);
+    assert.match(((await res.json()) as { error: string }).error, /JARVIS_CANONICAL_HOST/);
+  })();
+  await withEnv({ JARVIS_HOSTED: "1", RELAY_STORE: "file", RELAY_STAGING: "1" }, async () => {
+    assert.ok(passes(await middleware(req("http://127.0.0.1:4555/login"))), "loopback staging needs no canonical host");
+    process.env.JARVIS_CANONICAL_HOST = "127.0.0.1:4555";
+    assert.ok(passes(await middleware(req("http://127.0.0.1:4555/login"))));
+    assert.equal((await middleware(req("http://127.0.0.1:4555/login", { host: "localhost:4555" }))).status, 421, "pinned: even the other loopback name is refused");
+  })();
+});
 
 test("hosted staging: RELAY_STORE=file serves only with RELAY_STAGING=1 on a loopback host", withEnv({ JARVIS_HOSTED: "1", RELAY_STORE: "file", RELAY_STAGING: "1" }, async () => {
   assert.ok(passes(await middleware(req("http://127.0.0.1:4555/login"))));

@@ -93,16 +93,15 @@ export function fileKV(dir?: string | null): KV {
       return Number(e.v);
     }),
     mget: (keys) => withDoc((d) => keys.map((k) => d.kv[k]?.v ?? null)),
-    rpush: (key, value, ttlSec) => withDoc((d, now) => {
-      const l = d.lists[key] ?? { v: [], exp: null };
-      l.v.push(value); l.exp = ttl(now, ttlSec); d.lists[key] = l;
-    }),
     lpushTrim: (key, value, maxLen, ttlSec) => withDoc((d, now) => {
       const l = d.lists[key] ?? { v: [], exp: null };
       l.v.unshift(value); l.v = l.v.slice(0, Math.max(1, maxLen)); l.exp = ttl(now, ttlSec); d.lists[key] = l;
     }),
     lrange: (key) => withDoc((d) => [...(d.lists[key]?.v ?? [])]),
-    lrem: (key, value) => withDoc((d) => { const l = d.lists[key]; if (l) l.v = l.v.filter((x) => x !== value); }),
+    lreplace: (key, oldValue, newValue, ttlSec) => withDoc((d, now) => {
+      const l = d.lists[key] ?? { v: [], exp: null };
+      l.v = [newValue, ...l.v.filter((x) => x !== oldValue)]; l.exp = ttl(now, ttlSec); d.lists[key] = l;
+    }),
     ping: () => withDoc(() => undefined),
   };
 }

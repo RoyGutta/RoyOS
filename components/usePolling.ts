@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { schedulePolling } from "@/lib/pollScheduler";
 
 export interface PollState<T> {
   data: T | null;
@@ -14,6 +15,8 @@ export interface PollState<T> {
  * Poll a JSON endpoint on an interval. This is how the dashboard stays "live":
  * every panel re-reads its route every few seconds. Kept deliberately small —
  * for a single-user local tool, polling beats wiring up SSE/websockets.
+ * Polling stops while the tab is hidden and resumes with an immediate read when
+ * it is visible again (lib/pollScheduler.ts); `refresh` reads right now.
  */
 export function usePolling<T>(url: string, intervalMs = 3000): PollState<T> {
   const [data, setData] = useState<T | null>(null);
@@ -46,11 +49,10 @@ export function usePolling<T>(url: string, intervalMs = 3000): PollState<T> {
 
   useEffect(() => {
     alive.current = true;
-    load();
-    const id = setInterval(load, intervalMs);
+    const cancel = schedulePolling(load, intervalMs, typeof document === "undefined" ? null : document);
     return () => {
       alive.current = false;
-      clearInterval(id);
+      cancel();
     };
   }, [load, intervalMs]);
 

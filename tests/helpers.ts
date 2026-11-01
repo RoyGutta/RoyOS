@@ -19,8 +19,22 @@ export function tmpStore(): LinkStore {
   return new LinkStore(tmpKV());
 }
 
+/** Keys with a contract-strength hash (N=2^15, r=8, p=1 — anything weaker is refused since DC-9; about 100 ms a verify). */
 export async function testKeys(passphrase = "correct horse battery staple"): Promise<LinkKeys> {
-  return { installId: randomHex(8), linkKey: randomHex(32), cmdKey: randomHex(32), passHash: await makePassHash(passphrase, { N: 1 << 12 }), totpSecret: randomTotpSecret(), sessionKey: randomHex(32) };
+  return { installId: randomHex(8), linkKey: randomHex(32), cmdKey: randomHex(32), passHash: await makePassHash(passphrase), totpSecret: randomTotpSecret(), sessionKey: randomHex(32) };
+}
+
+/** The same KV, with every method call recorded by name — one call is one Redis command (or one EVAL / transaction). */
+export function countingKV(kv: KV): { kv: KV; calls: string[] } {
+  const calls: string[] = [];
+  const wrapped = new Proxy(kv, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      if (typeof v !== "function") return v;
+      return (...args: unknown[]) => { calls.push(String(prop)); return (v as (...a: unknown[]) => unknown).apply(target, args); };
+    },
+  });
+  return { kv: wrapped as KV, calls };
 }
 
 export function H(h: Record<string, string>): Headers {

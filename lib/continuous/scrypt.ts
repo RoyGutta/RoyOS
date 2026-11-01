@@ -5,19 +5,20 @@ import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
  * `supervisor.py dashboard-passcode`. Verification is async (scrypt off the event loop), compares in constant time, and
  * sizes `maxmem` from the parsed parameters: Node refuses when 128·r·(N+2) + 128·r·p exceeds maxmem, so a bare
  * "32 MiB default" fails for N=2^15, r=8 (33 554 432 + 1 024 bytes). Parameter bounds keep a hostile hash from asking for
- * gigabytes.
+ * gigabytes, and a hash weaker than the contract (N < 2^15, r < 8, p < 1) is refused outright.
  */
 export interface PassHash { N: number; r: number; p: number; salt: Buffer; hash: Buffer }
 
 const FORMAT = /^scrypt\$(\d{1,8})\$(\d{1,3})\$(\d{1,3})\$([a-f0-9]{16,128})\$([a-f0-9]{64})$/i;
-const N_MIN = 1 << 12, N_MAX = 1 << 17, R_MAX = 16, P_MAX = 4;
+/** The contract's parameters are the floor (DC-9): a weaker hash is refused, not verified. */
+const N_MIN = 1 << 15, N_MAX = 1 << 17, R_MIN = 8, R_MAX = 16, P_MIN = 1, P_MAX = 4;
 
 export function parsePassHash(s: unknown): PassHash | null {
   if (typeof s !== "string") return null;
   const m = FORMAT.exec(s);
   if (!m) return null;
   const N = Number(m[1]), r = Number(m[2]), p = Number(m[3]);
-  if (N < N_MIN || N > N_MAX || (N & (N - 1)) !== 0 || r < 1 || r > R_MAX || p < 1 || p > P_MAX) return null;
+  if (N < N_MIN || N > N_MAX || (N & (N - 1)) !== 0 || r < R_MIN || r > R_MAX || p < P_MIN || p > P_MAX) return null;
   return { N, r, p, salt: Buffer.from(m[4], "hex"), hash: Buffer.from(m[5], "hex") };
 }
 

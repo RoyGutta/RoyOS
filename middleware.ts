@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { allowedLocalHosts, chooseStore, isHosted, localHostAllowed } from "@/lib/continuous/mode";
+import { allowedLocalHosts, chooseStore, hostedHostCheck, isHosted, localHostAllowed } from "@/lib/continuous/mode";
 import { readCookie, sessionCookieName, verifySessionCookie } from "@/lib/continuous/session";
 
 /**
@@ -7,7 +7,8 @@ import { readCookie, sessionCookieName, verifySessionCookie } from "@/lib/contin
  * a DNS-rebound page reaches this server with its own hostname and is refused for reads and writes alike. The relay
  * routes do not exist locally.
  *
- * HOSTED mode (JARVIS_HOSTED=1): fail closed with 503 when no durable store is configured; otherwise serve ONLY
+ * HOSTED mode (JARVIS_HOSTED=1): answer only the canonical Host (JARVIS_CANONICAL_HOST; any other Host is 421, and a
+ * public Host with none set is 503); fail closed with 503 when no durable store is configured; otherwise serve ONLY
  * /login, /logout, /continuous, /api/auth/*, /api/continuous/*, /api/link/* and Next's static assets. Everything else —
  * every file-reading API and page of the local dashboard — is 404. Pages need a session cookie that verifies (the
  * record is checked again by the page); /api/continuous/* answers 401 without one. Security headers: a per-request
@@ -49,6 +50,8 @@ export async function middleware(req: NextRequest) {
 
   const nonce = b64(crypto.getRandomValues(new Uint8Array(16)));
   const csp = `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests`;
+  const pin = hostedHostCheck(host);
+  if (!pin.ok) return secure(NextResponse.json({ ok: false, error: pin.error }, { status: pin.status }), true, csp);
   if (chooseStore(host).kind === "none") return secure(NextResponse.json({ ok: false, error: "no durable store configured; refusing to serve (set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN)" }, { status: 503 }), true, csp);
   if (path === "/") return secure(NextResponse.redirect(new URL("/continuous", req.url)), true, csp);
   const isPage = PAGES.has(path);

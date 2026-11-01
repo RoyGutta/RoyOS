@@ -56,3 +56,34 @@ export function fmtAge(sec: number | null): string {
   if (h < 48) return `${h}h ${m % 60}m ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+
+// ---- honest "last command" (DC-6) ------------------------------------------------------------------------------
+/** What the browser knows right after it sent a command: the server's immediate answer, keyed by the command id. */
+export interface SentCommand { id: string | null; verb: string; outcome: "queued" | "ok" | "refused" | "failed"; message: string; at: number }
+export type LastState = "queued" | "ok" | "refused" | "expired" | "pending";
+export interface LastView { verb: string; state: LastState; message: string; at: number | null }
+export const QUEUED_TEXT = "queued — waiting for the Mac";
+
+function fromRecent(r: StatusPayload["recent"][number]): LastView {
+  const state: LastState = r.status === "expired" ? "expired" : r.ok === true ? "ok" : r.ok === false ? "refused" : "pending";
+  return { verb: r.verb, state, message: r.message ?? "", at: r.ackedAt ? Date.parse(r.ackedAt) : null };
+}
+
+/**
+ * A hosted command the server merely queued (202) is shown as queued — never as "ok" — until the Mac's ack for THAT
+ * id appears in `recent`, and the Mac's answer (ok, refused, expired) then replaces the local record for good. A local
+ * command (applied synchronously) shows its own result at once. With nothing sent this session, the newest result.
+ */
+export function lastCommandView(sent: SentCommand | null, status: Pick<StatusPayload, "pending" | "recent"> | null): LastView | null {
+  if (sent) {
+    const answered = sent.id ? status?.recent.find((r) => r.id === sent.id) : undefined;
+    if (answered) return fromRecent(answered);
+    if (sent.outcome === "queued") return { verb: sent.verb, state: "queued", message: QUEUED_TEXT, at: sent.at };
+    return { verb: sent.verb, state: sent.outcome === "ok" ? "ok" : "refused", message: sent.message, at: sent.at };
+  }
+  return status?.recent[0] ? fromRecent(status.recent[0]) : null;
+}
+
+export function lastStateLabel(state: LastState): string {
+  return state === "ok" ? "ok" : state === "refused" ? "refused" : state === "expired" ? "expired" : state === "queued" ? "queued" : "pending";
+}

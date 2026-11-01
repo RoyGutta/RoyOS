@@ -50,6 +50,19 @@ function lastJsonLine(stdout: string): unknown | undefined {
 }
 
 const T = (v: unknown, max: number): string | null => (typeof v === "string" ? v.replace(/[\p{C}]/gu, " ").slice(0, max) : null);
+
+/**
+ * Error text that leaves this adapter never carries an absolute path or a stack trace (DC-10): a Python traceback is
+ * reduced to its last line (the exception itself), `/Users/<name>` becomes `~`, every other absolute path becomes
+ * `<path>`, control characters become spaces, and the result is capped.
+ */
+export function redactLocalText(s: string, cap = 200): string {
+  let t = s;
+  if (/Traceback \(most recent call last\)/.test(t)) t = t.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+  t = t.replace(/\/Users\/[^/\s"');,:]+/g, "~");
+  t = t.replace(/(?<![\w~.])\/[A-Za-z0-9_][^\s"');,:\]]*/g, "<path>");
+  return t.replace(/[\p{C}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, cap);
+}
 const B = (v: unknown): boolean => v === true;
 const I = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
 
@@ -89,7 +102,8 @@ function describeFailure(r: RunResult, sub: Subcommand): { installed: boolean; e
   if (r.errno === "TIMEOUT") return { installed: true, error: `supervisor.py ${sub} timed out after ${RUN_TIMEOUT_MS / 1000} s` };
   if (r.errno === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { installed: true, error: `supervisor.py ${sub} printed more than 64 KB; refused` };
   if (/invalid choice|unrecognized|unknown command|usage:/i.test(r.stderr) && new RegExp(sub).test(r.stderr + " " + sub)) return { installed: false, error: `supervisor.py has no ${sub} yet (run supervisor.py install)` };
-  return { installed: true, error: `supervisor.py ${sub} failed (exit ${r.code ?? "?"})${r.stderr ? ": " + r.stderr.replace(/[\p{C}]/gu, " ").slice(0, 200) : ""}` };
+  const detail = redactLocalText(r.stderr);
+  return { installed: true, error: `supervisor.py ${sub} failed (exit ${r.code ?? "?"})${detail ? ": " + detail : ""}` };
 }
 
 export async function localStatus(): Promise<LocalStatus> {
@@ -111,5 +125,6 @@ export async function localApply(command: SignedCommand): Promise<ApplyResult> {
     const f = describeFailure(r, "link-apply");
     return { id: command.id, ok: false, message: f.error, snapshot: null };
   }
-  return { id: command.id, ok: out.ok === true, message: T(out.message, 200) ?? (out.ok === true ? "applied" : "refused"), snapshot: sanitizeLocalSnapshot(out.snapshot) };
+  const message = typeof out.message === "string" ? redactLocalText(out.message) : "";
+  return { id: command.id, ok: out.ok === true, message: message || (out.ok === true ? "applied" : "refused"), snapshot: sanitizeLocalSnapshot(out.snapshot) };
 }

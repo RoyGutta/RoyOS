@@ -42,10 +42,11 @@ const passphrase = randomHex(16);
 const installId = randomHex(8);
 const linkKey = randomHex(32), cmdKey = randomHex(32), totpSecret = randomTotpSecret();
 const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "jl-e2e-"));
-const env = { ...process.env, JARVIS_HOSTED: "1", RELAY_STORE: "file", RELAY_STAGING: "1", RELAY_FILE_DIR: storeDir, LINK_INSTALL_ID: installId, LINK_KEY: linkKey, CMD_KEY: cmdKey, SESSION_KEY: randomHex(32), TOTP_SECRET: totpSecret, DASHBOARD_PASS_HASH: await makePassHash(passphrase) };
+const env = { ...process.env, JARVIS_HOSTED: "1", JARVIS_CANONICAL_HOST: `127.0.0.1:${port}`, RELAY_STORE: "file", RELAY_STAGING: "1", RELAY_FILE_DIR: storeDir, LINK_INSTALL_ID: installId, LINK_KEY: linkKey, CMD_KEY: cmdKey, SESSION_KEY: randomHex(32), TOTP_SECRET: totpSecret, DASHBOARD_PASS_HASH: await makePassHash(passphrase) };
 delete env.UPSTASH_REDIS_REST_URL; delete env.UPSTASH_REDIS_REST_TOKEN;
 
-console.log(`hosted e2e: next start on ${origin} (JARVIS_HOSTED=1 RELAY_STORE=file RELAY_STAGING=1)`);
+delete env.VERCEL;
+console.log(`hosted e2e: next start on ${origin} (JARVIS_HOSTED=1 JARVIS_CANONICAL_HOST=127.0.0.1:${port} RELAY_STORE=file RELAY_STAGING=1)`);
 const server = spawn(process.execPath, [path.join(ROOT, "node_modules", "next", "dist", "bin", "next"), "start", "-H", "127.0.0.1", "-p", String(port)], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
 let serverLog = "";
 server.stdout.on("data", (d) => { serverLog += d; });
@@ -64,6 +65,10 @@ try {
   step(r.status, "GET /system is 404 when hosted", r.status === 404);
   r = await request(port, "GET", "/");
   step(r.status, "GET / redirects to /continuous", r.status === 307 && /\/continuous$/.test(r.headers.location ?? ""));
+  r = await request(port, "GET", "/login", { headers: { host: "jarvis-old-deploy.vercel.app" } });
+  step(r.status, "DC-7: a Host other than JARVIS_CANONICAL_HOST is 421", r.status === 421);
+  r = await request(port, "GET", "/api/link/report", { headers: { host: "evil.example" } });
+  step(r.status, "DC-7: the relay routes are pinned to the canonical Host too", r.status === 421);
   r = await request(port, "GET", "/continuous");
   step(r.status, "GET /continuous without a session redirects to /login", r.status === 307 && /\/login\?next=/.test(r.headers.location ?? ""));
   r = await request(port, "GET", "/login");
@@ -78,6 +83,8 @@ try {
   const browser = { origin, "sec-fetch-site": "same-origin", "content-type": "application/json", host: `127.0.0.1:${port}` };
   r = await request(port, "POST", "/api/auth/login", { headers: { ...browser, origin: "https://evil.example" }, body: JSON.stringify({ passphrase, code: "000000" }) });
   step(r.status, "login from a foreign Origin is refused", r.status === 403);
+  r = await request(port, "POST", "/api/auth/login", { headers: { ...browser, origin: `https://127.0.0.1:${port}` }, body: JSON.stringify({ passphrase, code: "000000" }) });
+  step(r.status, "DC-9: an Origin with the wrong scheme is refused", r.status === 403);
   r = await request(port, "POST", "/api/auth/login", { headers: browser, body: JSON.stringify({ passphrase: "wrong", code: totpCode(totpSecret, Date.now() / 1000) }) });
   step(r.status, "login with a wrong passphrase is 401", r.status === 401);
   r = await request(port, "POST", "/api/auth/login", { headers: browser, body: JSON.stringify({ passphrase, code: "000000" }) });
@@ -109,6 +116,12 @@ try {
   step(r.status, "report over 16 KB is 413", r.status === 413);
   r = await mac("report", JSON.stringify(hostedSnapshot(installId, {}, { lastRun: { ...hostedSnapshot(installId).supervisor.lastRun, objective: "free text" } })));
   step(r.status, "report whose lastRun.objective is text is rejected (400)", r.status === 400);
+  r = await mac("report", snapshotBody.replace(/^\{/, '{"toString":"SESSION TEXT",'));
+  step(r.status, "DC-2: a report carrying text under an inherited-name key is rejected (400)", r.status === 400 && /toString/.test(r.json?.error ?? ""));
+  r = await mac("report", snapshotBody.replace(/^\{/, '{"__proto__":"SESSION TEXT",'));
+  step(r.status, "DC-2: … and under __proto__", r.status === 400);
+  r = await mac("report", snapshotBody.replace('"at":"2026-10-31T12:05:00Z"', '"at":"hello 12"'));
+  step(r.status, "DC-9: a report whose time field is free text is rejected (400)", r.status === 400 && /RFC 3339/.test(r.json?.error ?? ""));
   const nonceA = randomHex(16);
   r = await mac("report", snapshotBody, { nonce: nonceA });
   step(r.status, "signed report is stored", r.status === 200 && typeof r.json?.receivedAt === "string");
@@ -132,12 +145,16 @@ try {
   step(r.status, "status shows 1 pending command", r.json?.pending?.length === 1 && r.json.pending[0].id === cmdId && r.json.pending[0].verb === "pause");
 
   // --- the Mac pulls, verifies and acks -------------------------------------------------------------------------
+  r = await mac("commands", '{"since":0}');
+  step(r.status, "DC-9: a commands pull with any key is 400", r.status === 400);
   r = await mac("commands", "{}");
   const pulled = r.json?.commands ?? [];
   const macCheck = pulled[0] ? verifyCommand(pulled[0], { cmdKeyHex: cmdKey, installId, channel: "remote", nowSec: Math.floor(Date.now() / 1000) }) : { ok: false, reason: "nothing pulled" };
   step(r.status, "Mac pulls exactly the one command and its CMD_KEY signature verifies on channel remote", r.status === 200 && pulled.length === 1 && pulled[0].id === cmdId && macCheck.ok === true, macCheck.ok ? "" : macCheck.reason);
   const localCheck = pulled[0] ? verifyCommand(pulled[0], { cmdKeyHex: cmdKey, installId, channel: "local", nowSec: Math.floor(Date.now() / 1000) }) : { ok: true };
   step("-", "the same command is refused on channel local (channel is in the MAC)", localCheck.ok === false);
+  r = await mac("ack", JSON.stringify({ id: cmdId, ok: true, message: "paused", snapshot: {} }));
+  step(r.status, "DC-9: an ack with an unknown key is 400 (and does not ack)", r.status === 400);
   r = await mac("ack", JSON.stringify({ id: cmdId, ok: true, message: "paused" }));
   step(r.status, "Mac acks the command", r.status === 200 && r.json?.result === "acked");
   r = await mac("ack", JSON.stringify({ id: cmdId, ok: true, message: "paused" }));
