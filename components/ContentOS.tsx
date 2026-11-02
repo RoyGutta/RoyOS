@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { usePolling } from "./usePolling";
+import SignInToApprove from "./SignInToApprove";
+import { approvalHeaders, useApprovalSession, type ApprovalSession } from "./useApprovalSession";
 import { FORMATS, RIGHTS_STATES, STAGES } from "@/lib/content/types";
 import type { ContentItem, ContentPayload, FormatReport } from "@/lib/content/types";
 
@@ -22,19 +24,48 @@ function Panel({ title, sub, children }: { title: string; sub?: string; children
   );
 }
 
-async function act(body: Record<string, unknown>): Promise<string> {
-  const r = await fetch("/api/content/action", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const j = (await r.json()) as { ok?: boolean; error?: string };
-  return j.ok ? "done" : j.error ?? "failed";
+type ActResult = { status: number; ok?: boolean; error?: string; nonce?: string };
+/** The two approve actions must carry the session-bound X-CSRF; the server refuses them otherwise (G9-2). */
+async function act(body: Record<string, unknown>, csrf?: string | null): Promise<ActResult> {
+  try {
+    const r = await fetch("/api/content/action", { method: "POST", headers: approvalHeaders(csrf), body: JSON.stringify(body) });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string; nonce?: string };
+    return { status: r.status, ...j };
+  } catch (e) { return { status: 0, ok: false, error: e instanceof Error ? e.message : "request failed" }; }
 }
+const said = (j: ActResult) => (j.ok ? "done" : j.error ?? "failed");
+const VERSION = /^[a-f0-9]{64}$/;
 
-function Detail({ c, onMsg }: { c: ContentItem; onMsg: (m: string) => void }) {
+function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => void; session: ApprovalSession }) {
   const [at, setAt] = useState("");
   const [note, setNote] = useState("");
   const [rights, setRights] = useState(c.source?.rights ?? "UNKNOWN");
   const [rightsNote, setRightsNote] = useState("");
+  // Roy's TWO tier: the nonce from click 1 lives here, for THIS item and displayed version only, until click 2 succeeds.
+  const [first, setFirst] = useState<{ id: string; version: string; nonce: string } | null>(null);
   const s = c.script;
   const failed = c.qa.checks.filter((k) => !k.ok);
+  // G9-5: the version Roy SEES is the one both clicks sign; the runtime refuses it when the item changed since.
+  const version = typeof c.reviewVersion === "string" && VERSION.test(c.reviewVersion) ? c.reviewVersion : null;
+  const signedIn = session.state === "signed-in";
+  const firstDone = !!first && !!version && first.id === c.id && first.version === version;
+  async function approve(body: Record<string, unknown>): Promise<ActResult> {
+    const j = await act(body, session.csrf);
+    if (j.status === 401 || j.status === 403) session.refresh();   // the session ended: the buttons give way to "Sign in to approve"
+    return j;
+  }
+  async function approveFirst() {
+    if (!version) return;
+    const j = await approve({ action: "approve-first", id: c.id, version });
+    setFirst(j.ok && typeof j.nonce === "string" ? { id: c.id, version, nonce: j.nonce } : null);
+    onMsg(j.ok ? "1 of 2 recorded — confirm at least 2 s and at most 5 min later" : said(j));
+  }
+  async function approveSecond() {
+    if (!firstDone || !version || !first) return;
+    const j = await approve({ action: "approve", id: c.id, version, nonce: first.nonce, at: at || undefined, note });
+    if (j.ok) setFirst(null);
+    onMsg(said(j));
+  }
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
       <div className="flex flex-col gap-2">
@@ -54,7 +85,7 @@ function Detail({ c, onMsg }: { c: ContentItem; onMsg: (m: string) => void }) {
             <div className="flex flex-wrap gap-2 items-center">
               <select value={rights} onChange={(e) => setRights(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]">{RIGHTS_STATES.map((r) => <option key={r} value={r} className="bg-black">{r}</option>)}</select>
               <input value={rightsNote} onChange={(e) => setRightsNote(e.target.value)} placeholder="basis: licence / permission / ownership / PD source / reviewer: name" className="flex-1 bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
-              <button className="chip text-muted" onClick={async () => onMsg(await act({ action: "rights", id: c.id, state: rights, note: rightsNote }))}>Record rights</button>
+              <button className="chip text-muted" onClick={async () => onMsg(said(await act({ action: "rights", id: c.id, state: rights, note: rightsNote })))}>Record rights</button>
             </div>
           </div>
         )}
@@ -74,13 +105,15 @@ function Detail({ c, onMsg }: { c: ContentItem; onMsg: (m: string) => void }) {
         {c.status === "APPROVAL" && (
           <div className="border border-line rounded p-3 flex flex-col gap-2">
             <div className="eyebrow">Approval — explicit human action</div>
-            <div className="text-muted text-[11px]">Watch the video once. Publishing takes two separate confirmations: click 1 of 2, then 2 of 2 (at least 2 s later, within 5 min). It is then queued for the publisher at the time below (default: next weekday 15:00).</div>
+            <div className="text-muted text-[11px]">Watch the video once. Publishing takes two separate confirmations: click 1 of 2, then 2 of 2 (at least 2 s later, within 5 min), both for the version shown here. It is then queued for the publisher at the time below (default: next weekday 15:00).</div>
+            <div className="text-[11px]"><span className="text-muted">Version you are approving: </span>{version ? <code className="break-all">{version}</code> : <span className="text-offline" role="status">Version unavailable — re-run QA</span>}</div>
             <div className="flex flex-wrap gap-2 items-center">
               <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
               <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note (required to reject)" className="flex-1 bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
-              <button className="chip text-muted" onClick={async () => onMsg(await act({ action: "approve-first", id: c.id }))}>Approve (1 of 2)</button>
-              <button className="chip text-online" onClick={async () => onMsg(await act({ action: "approve", id: c.id, at: at || undefined, note }))}>Confirm publish (2 of 2)</button>
-              <button className="chip text-offline" onClick={async () => onMsg(note ? await act({ action: "reject", id: c.id, note }) : "a note is required to reject")}>Reject</button>
+              {!signedIn && <SignInToApprove session={session} next="/content" />}
+              {signedIn && !firstDone && <button className="chip text-muted disabled:opacity-50" disabled={!version} onClick={() => void approveFirst()}>Approve (1 of 2)</button>}
+              {signedIn && firstDone && <button className="chip text-online disabled:opacity-50" disabled={!version} onClick={() => void approveSecond()}>Confirm publish (2 of 2)</button>}
+              <button className="chip text-offline" onClick={async () => onMsg(note ? said(await act({ action: "reject", id: c.id, note })) : "a note is required to reject")}>Reject</button>
             </div>
           </div>
         )}
@@ -88,8 +121,8 @@ function Detail({ c, onMsg }: { c: ContentItem; onMsg: (m: string) => void }) {
           <div className="border border-line rounded p-3 flex flex-wrap gap-2 items-center">
             <span className="text-ink text-[12px]">Queued for {c.schedule.publishAt} · approved by {c.approval.by}</span>
             <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
-            <button className="chip text-muted" onClick={async () => onMsg(at ? await act({ action: "queue", id: c.id, at }) : "pick a time")}>Move</button>
-            <button className="chip text-offline" onClick={async () => onMsg(await act({ action: "reject", id: c.id, note: note || "pulled from queue" }))}>Pull</button>
+            <button className="chip text-muted" onClick={async () => onMsg(at ? said(await act({ action: "queue", id: c.id, at })) : "pick a time")}>Move</button>
+            <button className="chip text-offline" onClick={async () => onMsg(said(await act({ action: "reject", id: c.id, note: note || "pulled from queue" })))}>Pull</button>
           </div>
         )}
         <div><span className="eyebrow">History</span>{c.history.slice(-6).reverse().map((h, i) => <div key={i} className="text-muted text-[11px]">{h.at.slice(5, 16)} {h.from ?? "·"} → {h.to} · {h.by}{h.note ? ` · ${h.note}` : ""}</div>)}</div>
@@ -121,6 +154,7 @@ export default function ContentOS() {
   const [view, setView] = useState<View>("pipeline");
   const [open, setOpen] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const session = useApprovalSession();
   if (!data) return <div className="text-muted text-[12px] p-4">loading…</div>;
   const rep = data.report;
   const items = data.items;
@@ -141,7 +175,7 @@ export default function ContentOS() {
         <nav className="flex flex-wrap gap-1 ml-2">{VIEWS.map((v) => <button key={v} onClick={() => setView(v)} className={`chip ${view === v ? "text-online" : "text-muted"}`}>{v.toUpperCase()}{v === "approval" && waiting.length ? ` ${waiting.length}` : ""}</button>)}</nav>
         <span className="ml-auto flex items-center gap-2">
           {rep?.paused ? <span className="chip text-offline">PUBLISHING PAUSED</span> : <span className="chip text-online">publishing armed (approved items only)</span>}
-          <button className="chip text-muted" onClick={async () => setMsg(await act({ action: "pause", on: !rep?.paused }))}>{rep?.paused ? "Resume" : "Emergency pause"}</button>
+          <button className="chip text-muted" onClick={async () => setMsg(said(await act({ action: "pause", on: !rep?.paused })))}>{rep?.paused ? "Resume" : "Emergency pause"}</button>
           {msg && <span className="text-muted text-[11px]">{msg}</span>}
         </span>
       </div>
@@ -190,7 +224,7 @@ export default function ContentOS() {
       )}
       {view === "history" && <Panel title="Content history" sub="audit log, content actions only">{data.audit.slice().reverse().map((a) => <div key={a.id} className="flex gap-3 text-[12px]"><span className="text-muted tabular-nums shrink-0">{a.at.slice(5, 16)}</span><span className="text-muted">{a.actor}</span><span className="text-ink truncate">{a.action.replace("content_", "")}: {a.result}</span>{a.approval !== "n/a" && <span className="chip text-muted">{a.approval}</span>}</div>)}{data.audit.length === 0 && <div className="text-muted">nothing yet</div>}</Panel>}
 
-      {sel && <Panel title={sel.title} sub={`${sel.id} · ${sel.status}`}><Detail c={sel} onMsg={setMsg} /></Panel>}
+      {sel && <Panel title={sel.title} sub={`${sel.id} · ${sel.status}`}><Detail key={sel.id} c={sel} onMsg={setMsg} session={session} /></Panel>}
     </div>
   );
 }

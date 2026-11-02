@@ -1,10 +1,8 @@
-import { childEnv } from "@/lib/jarvis/runs";
 import { NextResponse } from "next/server";
-import { approvalOriginGuard, localWriteGuard, rateLimiter } from "@/lib/jarvis/guard";
-import { signApproval } from "@/lib/jarvis/approvalAuth";
-import { execFile } from "node:child_process";
-import path from "node:path";
-import os from "node:os";
+import { requireApprovalSession } from "@/lib/jarvis/approvalSession";
+import { parseCliJson, runCli } from "@/lib/jarvis/cli";
+import { localWriteGuard, rateLimiter } from "@/lib/jarvis/guard";
+import { CONTENT_VERSION, NONCE, firstClick, secondClick } from "@/lib/jarvis/twoClick";
 
 export const dynamic = "force-dynamic";
 
@@ -12,43 +10,44 @@ export const dynamic = "force-dynamic";
  * POST /api/content/action — the dashboard's ONE write path into the Content OS.
  * It shells out to content_os.py so the file lock, prerequisites and audit log are
  * the same code Jarvis and the worker use. Explicit human actions only:
- *   {action:"approve", id, at?, note?} | {action:"reject", id, note} | {action:"pause", on:boolean} | {action:"queue", id, at} | {action:"rights", id, state, note}
+ *   {action:"approve-first", id, version} → {ok, nonce}            click 1 of 2 (signs first:content:<id>:<version>:…)
+ *   {action:"approve", id, version, nonce, at?, note?}             click 2 of 2 (--stage second; signs content:<id>:<version>:…)
+ *   {action:"reject", id, note} | {action:"pause", on:boolean} | {action:"queue", id, at} | {action:"rights", id, state, note}
+ * `version` is the reviewVersion the card DISPLAYED (G9-5): the browser sends it with both clicks, the signature binds it,
+ * and content_os.py refuses it when the item changed since. The two approve actions need Roy's session + X-CSRF (G9-2).
  */
-import { VOICE_LINE } from "@/lib/jarvis/runs";
 const ID = /^cnt_[a-f0-9]{6,16}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?$/;
-
-function run(args: string[]): Promise<{ code: number; out: string }> {
-  return new Promise((resolve) => {
-    const env = childEnv();
-    execFile("uv", ["run", "python", "content_os.py", ...args], { cwd: VOICE_LINE, env, timeout: 60_000 }, (err, stdout, stderr) => {
-      const lines = (stdout || "").trim().split("\n").filter((l) => l.startsWith("{"));
-      resolve({ code: err ? 1 : 0, out: lines.pop() ?? (stderr || "").slice(-300) });
-    });
-  });
-}
-
+const APPROVALS = new Set(["approve-first", "approve"]);
 const limited = rateLimiter(30, 60_000);
 
 export async function POST(req: Request) {
   const refused = localWriteGuard(req) ?? limited();
   if (refused) return refused;
-  const b = (await req.json().catch(() => ({}))) as { action?: string; id?: string; at?: string; note?: string; on?: boolean; state?: string };
+  const b = (await req.json().catch(() => ({}))) as { action?: string; id?: string; at?: string; note?: string; on?: boolean; state?: string; version?: unknown; nonce?: unknown };
+  if (APPROVALS.has(String(b.action))) {
+    const gate = await requireApprovalSession(req);     // G9-2: session + X-CSRF + origin, before anything is signed
+    if (!gate.ok) return gate.res;
+  }
   const by = "dashboard";
   let args: string[] | null = null;
+  let stdin: string | null = null;
+  let nonce: string | null = null;
   if ((b.action === "approve" || b.action === "approve-first") && b.id && ID.test(b.id)) {
-    const refusedApproval = approvalOriginGuard(req);          // signing an approval needs the dashboard page itself
-    if (refusedApproval) return refusedApproval;
-    const v = await run(["version", b.id]);                     // the signature binds the exact content version the CLI sees now
-    let cv: string | null = null;
-    try { cv = (JSON.parse(v.out) as { contentVersion?: string }).contentVersion ?? null; } catch { cv = null; }
-    if (!cv) return NextResponse.json({ ok: false, error: "content version unavailable; nothing signed" }, { status: 409 });
-    // Roy's TWO tier: publishing is two separate clicks — "approve-first" signs first:content:…, "approve" the item itself
-    args = b.action === "approve-first"
-      ? ["approve", b.id, "--stage", "first", "--by", by, "--auth", signApproval(`first:content:${b.id}:${cv}`)]
-      : ["approve", b.id, "--by", by, "--auth", signApproval(`content:${b.id}:${cv}`)];
-    if (b.at && ISO.test(b.at)) args.push("--at", b.at);
-    if (b.note) args.push("--note", b.note.slice(0, 300));
+    if (typeof b.version !== "string" || !CONTENT_VERSION.test(b.version)) return NextResponse.json({ ok: false, error: "version must be the 64-hex reviewVersion shown on the approval card; nothing signed" }, { status: 400 });
+    const scope = `content:${b.id}:${b.version}`;
+    // Roy's TWO tier: publishing is two separate clicks, 2 s – 5 min apart; both signatures go on stdin, never argv.
+    if (b.action === "approve-first") {
+      const c = firstClick(scope);
+      nonce = c.nonce; stdin = c.stdin;
+      args = ["approve", b.id, "--stage", "first", "--version", b.version, "--by", by, "--auth-stdin"];
+    } else {
+      if (typeof b.nonce !== "string" || !NONCE.test(b.nonce)) return NextResponse.json({ ok: false, error: "click 1 first: the confirmation needs the nonce returned by \"Approve (1 of 2)\"" }, { status: 400 });
+      stdin = secondClick(scope, b.nonce).stdin;
+      args = ["approve", b.id, "--stage", "second", "--version", b.version, "--by", by, "--auth-stdin"];
+      if (b.at && ISO.test(b.at)) args.push("--at", b.at);
+      if (b.note) args.push("--note", b.note.slice(0, 300));
+    }
   } else if (b.action === "reject" && b.id && ID.test(b.id) && b.note) {
     args = ["reject", b.id, "--by", by, "--note", b.note.slice(0, 300)];
   } else if (b.action === "pause" && typeof b.on === "boolean") {
@@ -59,8 +58,7 @@ export async function POST(req: Request) {
     args = ["queue", b.id, b.at, "--by", by];
   }
   if (!args) return NextResponse.json({ ok: false, error: "invalid action" }, { status: 400 });
-  const r = await run(args);
-  let parsed: { ok?: boolean; error?: string } = {};
-  try { parsed = JSON.parse(r.out); } catch { parsed = { ok: false, error: r.out || "no output" }; }
+  const parsed = parseCliJson(await runCli("content_os.py", args, stdin, { timeoutMs: 60_000 }), "content_os.py");
+  if (parsed.ok === true && nonce) parsed.nonce = nonce;          // click 1 succeeded: the browser keeps this for click 2
   return NextResponse.json(parsed, { status: parsed.ok ? 200 : 409 });
 }

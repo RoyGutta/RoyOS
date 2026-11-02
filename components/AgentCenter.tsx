@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { usePolling } from "./usePolling";
 import { askJarvis } from "./CommandBar";
+import SignInToApprove from "./SignInToApprove";
+import { approvalHeaders, useApprovalSession, type ApprovalSession } from "./useApprovalSession";
 import { AGENT_IDS, type AgentInfo, type Run, type Task } from "@/lib/jarvis/types";
 import type { JarvisPayload } from "@/app/api/jarvis/route";
 
@@ -12,9 +14,9 @@ const AGENT_BADGE: Record<string, string> = { IDLE: "", QUEUED: "", WORKING: "ba
 const hhmm = (iso: string | null | undefined) => (iso ? iso.slice(11, 16) : "—");
 const label = (s: string) => s.toLowerCase().replace(/_/g, " ");
 
-async function act(body: Record<string, unknown>) {
+async function act(body: Record<string, unknown>, csrf?: string | null) {
   try {
-    const r = await fetch("/api/agents/action", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch("/api/agents/action", { method: "POST", headers: approvalHeaders(csrf), body: JSON.stringify(body) });
     return (await r.json()) as { ok: boolean; message?: string; error?: string; task?: string };
   } catch (e) { return { ok: false, error: e instanceof Error ? e.message : "request failed" }; }
 }
@@ -23,9 +25,9 @@ function Panel({ title, sub, right, children }: { title: string; sub?: string; r
   return <section className="panel flex flex-col min-h-0"><div className="panel__head"><span className="eyebrow">{title}</span>{sub && <span className="text-muted text-[11px] truncate">{sub}</span>}{right && <span className="ml-auto">{right}</span>}</div><div className="px-4 py-3 text-[13px]">{children}</div></section>;
 }
 
-function TaskDetail({ t, byId, onAction }: { t: Task; byId: Map<string, Task>; onAction: (m: string) => void }) {
+function TaskDetail({ t, byId, onAction, session }: { t: Task; byId: Map<string, Task>; onAction: (m: string) => void; session: ApprovalSession }) {
   const [busy, setBusy] = useState(false);
-  async function go(body: Record<string, unknown>) { setBusy(true); const r = await act(body); setBusy(false); onAction(r.message ?? r.error ?? (r.ok ? "done" : "failed")); }
+  async function go(body: Record<string, unknown>) { setBusy(true); const r = await act(body, session.csrf); setBusy(false); if (!r.ok && body.action === "approve") session.refresh(); onAction(r.message ?? r.error ?? (r.ok ? "done" : "failed")); }
   const h = t.handoff;
   const live = ["RUNNING", "VERIFYING", "ASSIGNED"].includes(t.state);
   return (
@@ -45,7 +47,7 @@ function TaskDetail({ t, byId, onAction }: { t: Task; byId: Map<string, Task>; o
           <div className="border border-warn/50 rounded p-3">
             <div className="eyebrow text-warn mb-1">Approval {t.approval.granted ? "granted" : "needed"}</div>
             <div className="text-ink">{t.approval.description}</div>
-            {!t.approval.granted && t.state === "WAITING_FOR_APPROVAL" && <div className="flex gap-2 mt-2"><button className="btn btn--primary" disabled={busy} onClick={() => go({ action: "approve", task: t.id, approvalId: t.approval!.id })}>Approve this exact action</button><button className="btn" disabled={busy} onClick={() => go({ action: "cancel", task: t.id })}>Decline (cancel task)</button></div>}
+            {!t.approval.granted && t.state === "WAITING_FOR_APPROVAL" && <div className="flex gap-2 mt-2 items-center">{session.state === "signed-in" ? <button className="btn btn--primary" disabled={busy} onClick={() => go({ action: "approve", task: t.id, approvalId: t.approval!.id })}>Approve this exact action</button> : <SignInToApprove session={session} next="/agents" />}<button className="btn" disabled={busy} onClick={() => go({ action: "cancel", task: t.id })}>Decline (cancel task)</button></div>}
             <div className="text-muted text-[10.5px] mt-1">bound to {t.approval.id}; the worker performs it once and cannot grant it to itself</div>
           </div>
         )}
@@ -100,6 +102,7 @@ function AssignForm({ onDone }: { onDone: (m: string) => void }) {
 export default function AgentCenter() {
   const { data, refresh } = usePolling<Payload>("/api/agents", 3000);
   const jarvis = usePolling<JarvisPayload>("/api/jarvis", 4000);
+  const session = useApprovalSession();
   const [selected, setSelected] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [bigAsk, setBigAsk] = useState("");
@@ -163,7 +166,7 @@ export default function AgentCenter() {
           </div>
         )}
       </Panel>
-      {sel && <TaskDetail t={sel} byId={byId} onAction={(m) => { setMsg(m); refresh(); }} />}
+      {sel && <TaskDetail t={sel} byId={byId} session={session} onAction={(m) => { setMsg(m); refresh(); }} />}
     </div>
   );
 }

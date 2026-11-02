@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { usePolling, timeAgo } from "./usePolling";
+import SignInToApprove from "./SignInToApprove";
+import { approvalHeaders, useApprovalSession, type ApprovalSession } from "./useApprovalSession";
 
 /* ---- types: mirror voice-line/factory.py project records (logs/factory.json) ---- */
 export type FactoryState = "INTAKE" | "AWAITING_PLAN_APPROVAL" | "BUILDING" | "CRITIQUE" | "REVISION" | "VERIFYING" | "REVIEW_READY" | "AWAITING_DEPLOYMENT" | "FAILED" | "BLOCKED" | "CANCELLED" | string;
@@ -68,20 +70,23 @@ function parseServices(text: string): { name: string; description: string }[] {
 }
 function describe(r: ApiResult): string { return `HTTP ${r.status} · ${JSON.stringify(r.body)}`; }
 
-async function post(body: Record<string, unknown>): Promise<ApiResult> {
-  const r = await fetch("/api/factory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+/** An approval (approve-plan, approve-deploy-first, approve-deploy) must carry the session-bound X-CSRF; the server refuses it otherwise (G9-2). */
+async function post(body: Record<string, unknown>, csrf?: string | null): Promise<ApiResult> {
+  const r = await fetch("/api/factory", { method: "POST", headers: approvalHeaders(csrf), body: JSON.stringify(body) });
   const j = (await r.json().catch(() => ({ ok: false, error: `non-JSON response (${r.status})` }))) as Record<string, unknown>;
   return { status: r.status, body: j };
 }
 
-/** Wraps a POST: disables the caller while in flight, and reports the verbatim result (success or 400/409 error). */
-function useAction(refresh: () => void) {
+/** Wraps a POST: disables the caller while in flight, reports the verbatim result (success or 400/409 error) and returns it. */
+function useAction(refresh: () => void, csrf?: string | null) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  async function act(label: string, body: Record<string, unknown>) {
+  async function act(label: string, body: Record<string, unknown>): Promise<ApiResult | null> {
     setBusy(label); setMsg(null);
-    try { const r = await post(body); setMsg(`${label}: ${describe(r)}`); } catch (e) { setMsg(`${label}: ${e instanceof Error ? e.message : "request failed"}`); }
+    let r: ApiResult | null = null;
+    try { r = await post(body, csrf); setMsg(`${label}: ${describe(r)}`); } catch (e) { setMsg(`${label}: ${e instanceof Error ? e.message : "request failed"}`); }
     setBusy(null); refresh();
+    return r;
   }
   return { busy, msg, act };
 }
@@ -182,12 +187,33 @@ function AnswerForm({ p, refresh }: { p: FactoryProject; refresh: () => void }) 
 }
 
 /* ---- right column: one project ---- */
-function ProjectDetail({ p, refresh }: { p: FactoryProject; refresh: () => void }) {
-  const { busy, msg, act } = useAction(refresh);
+function ProjectDetail({ p, refresh, session }: { p: FactoryProject; refresh: () => void; session: ApprovalSession }) {
+  const { busy, msg, act } = useAction(refresh, session.csrf);
+  // Roy's TWO tier: the nonce from click 1 lives here, for THIS project and site hash only, until click 2 succeeds.
+  const [first, setFirst] = useState<{ project: string; siteHash: string; nonce: string } | null>(null);
   const gate = p.findings?.gate ?? null; const a11y = p.findings?.a11y ?? null; const rp = p.reviewPackage;
   const openFindings = (gate?.findings ?? []).filter((f) => ["failed", "needs_manual_review", "not_run"].includes(f.status));
   const stageNames = [...STAGE_ORDER, ...Object.keys(p.stages ?? {}).filter((s) => !STAGE_ORDER.includes(s))];
   const terminal = TERMINAL.includes(p.state);
+  const siteHash = typeof rp?.siteHash === "string" && /^[a-f0-9]{12,64}$/.test(rp.siteHash) ? rp.siteHash : null;
+  const signedIn = session.state === "signed-in";
+  const firstDone = !!first && !!siteHash && first.project === p.id && first.siteHash === siteHash;
+  async function approveOrRefresh(label: string, body: Record<string, unknown>): Promise<ApiResult | null> {
+    const r = await act(label, body);
+    if (r && (r.status === 401 || r.status === 403)) session.refresh();   // the session ended: the buttons give way to "Sign in to approve"
+    return r;
+  }
+  async function deployFirst() {
+    if (!siteHash) return;
+    const r = await approveOrRefresh("approve-deploy-first", { action: "approve-deploy-first", project: p.id, siteHash });
+    const nonce = r && r.status === 200 && r.body.ok === true && typeof r.body.nonce === "string" ? r.body.nonce : null;
+    setFirst(nonce ? { project: p.id, siteHash, nonce } : null);
+  }
+  async function deploySecond() {
+    if (!firstDone || !siteHash || !first) return;
+    const r = await approveOrRefresh("approve-deploy", { action: "approve-deploy", project: p.id, siteHash, nonce: first.nonce });
+    if (r && r.status === 200 && r.body.ok === true) setFirst(null);
+  }
   return (
     <div className="flex flex-col gap-3 text-[12px]">
       <section className="panel">
@@ -195,10 +221,11 @@ function ProjectDetail({ p, refresh }: { p: FactoryProject; refresh: () => void 
           <span className="text-ink text-[13px]">{p.brief?.business_name || p.id}</span>
           <span className={`badge ${stateBadge(p.state)}`}>{p.state.replace(/_/g, " ")}</span>
           <span className="text-muted text-[11px]">stage · {p.stage} · revisions {p.revisions ?? 0}</span>
-          <span className="ml-auto flex gap-2 flex-wrap">
+          <span className="ml-auto flex gap-2 flex-wrap items-center">
             {RUNNABLE.includes(p.state) && <button className="btn btn--primary btn--sm" disabled={busy !== null} onClick={() => void act("run", { action: "run", project: p.id })}>{busy === "run" ? "Running…" : "Run build"}</button>}
-            {p.state === "REVIEW_READY" && <button className="btn btn--sm" disabled={busy !== null} onClick={() => void act("approve-deploy-first", { action: "approve-deploy-first", project: p.id, siteHash: p.reviewPackage?.siteHash })}>{busy === "approve-deploy-first" ? "Recording…" : "Approve deployment (1 of 2)"}</button>}
-            {p.state === "REVIEW_READY" && <button className="btn btn--primary btn--sm" disabled={busy !== null} onClick={() => void act("approve-deploy", { action: "approve-deploy", project: p.id, siteHash: p.reviewPackage?.siteHash })}>{busy === "approve-deploy" ? "Approving…" : "Confirm deployment (2 of 2)"}</button>}
+            {p.state === "REVIEW_READY" && !signedIn && <SignInToApprove session={session} next="/factory" small />}
+            {p.state === "REVIEW_READY" && signedIn && !firstDone && <button className="btn btn--sm" disabled={busy !== null || !siteHash} onClick={() => void deployFirst()}>{busy === "approve-deploy-first" ? "Recording…" : "Approve deployment (1 of 2)"}</button>}
+            {p.state === "REVIEW_READY" && signedIn && firstDone && <button className="btn btn--primary btn--sm" disabled={busy !== null} onClick={() => void deploySecond()}>{busy === "approve-deploy" ? "Approving…" : "Confirm deployment (2 of 2)"}</button>}
             {!terminal && <button className="btn btn--danger btn--sm" disabled={busy !== null} onClick={() => void act("cancel", { action: "cancel", project: p.id })}>{busy === "cancel" ? "Cancelling…" : "Cancel"}</button>}
           </span>
         </div>
@@ -210,6 +237,7 @@ function ProjectDetail({ p, refresh }: { p: FactoryProject; refresh: () => void 
             {p.approvals?.plan && <><dt>Plan</dt><dd>approved by {p.approvals.plan.by} · {timeAgo(p.approvals.plan.at)} · hash {p.approvals.plan.planHash}</dd></>}
             {p.approvals?.deploy && <><dt>Deploy</dt><dd>approved by {p.approvals.deploy.by} · {timeAgo(p.approvals.deploy.at)} · site {(p.approvals.deploy.siteHash ?? "").slice(0, 12)}</dd></>}
           </dl>
+          {p.state === "REVIEW_READY" && signedIn && <div className="text-[11px] text-muted" role="status">{firstDone ? `1 of 2 recorded for site ${siteHash?.slice(0, 12)} · confirm at least 2 s and at most 5 min later` : siteHash ? `Deploying takes two separate clicks: 1 of 2, then 2 of 2 (2 s – 5 min later), both for site ${siteHash.slice(0, 12)}` : "No reviewed site hash yet; nothing can be approved."}</div>}
           <div className="text-[11px] break-words" role="status" aria-live="polite">{msg && <code>{msg}</code>}</div>
         </div>
       </section>
@@ -255,7 +283,7 @@ function ProjectDetail({ p, refresh }: { p: FactoryProject; refresh: () => void 
         <section className="panel">
           <div className="panel__head">
             <span className="eyebrow">Plan</span>
-            {p.state === "AWAITING_PLAN_APPROVAL" && <span className="ml-auto"><button className="btn btn--primary btn--sm" disabled={busy !== null} onClick={() => void act("approve-plan", { action: "approve-plan", project: p.id, planHash: p.planHash })}>{busy === "approve-plan" ? "Approving…" : `Approve this plan (${p.planHash ?? "no hash"})`}</button></span>}
+            {p.state === "AWAITING_PLAN_APPROVAL" && <span className="ml-auto">{signedIn ? <button className="btn btn--primary btn--sm" disabled={busy !== null} onClick={() => void approveOrRefresh("approve-plan", { action: "approve-plan", project: p.id, planHash: p.planHash })}>{busy === "approve-plan" ? "Approving…" : `Approve this plan (${p.planHash ?? "no hash"})`}</button> : <SignInToApprove session={session} next="/factory" small />}</span>}
           </div>
           <div className="px-4 py-3">
             <dl className="hud__dl">
@@ -329,6 +357,7 @@ function ProjectDetail({ p, refresh }: { p: FactoryProject; refresh: () => void 
 export default function FactoryView() {
   const { data, error, loading, refresh } = usePolling<Payload>("/api/factory", 3000);
   const [selected, setSelected] = useState<string | null>(null);
+  const session = useApprovalSession();
   const projects = data?.projects ?? [];
   const current = projects.find((p) => p.id === selected) ?? projects[0] ?? null;
   return (
@@ -358,7 +387,7 @@ export default function FactoryView() {
             </ul>
           </section>
         </div>
-        <div>{current ? <ProjectDetail p={current} refresh={refresh} /> : <section className="panel"><div className="px-4 py-3 text-[12px] text-muted">Select a project to see its stages, questions, plan, findings and review package.</div></section>}</div>
+        <div>{current ? <ProjectDetail key={current.id} p={current} refresh={refresh} session={session} /> : <section className="panel"><div className="px-4 py-3 text-[12px] text-muted">Select a project to see its stages, questions, plan, findings and review package.</div></section>}</div>
       </div>
     </div>
   );

@@ -1,3 +1,5 @@
+import type { PendingApproval } from "./types";
+
 /**
  * Redaction for text the dashboard writes into the voice line's inbox. Mirrors the
  * key shapes in voice-line/redact.py (the runtime redacts its own ledger, events and
@@ -25,5 +27,37 @@ const PATTERNS: [RegExp, string][] = [
 export function redact(text: string): string {
   let out = text;
   for (const [re, rep] of PATTERNS) out = out.replace(re, rep);
+  return out;
+}
+
+/**
+ * OB-10: the only approval cards that may show an unmasked recipient and text — Roy's own step 1 / step 2 review of an
+ * outbound message (voice-line/outbound_tools.py). Tool names arrive with or without the `mcp__jarvis__` prefix.
+ */
+export const OUTBOUND_REVIEW_TOOLS: ReadonlySet<string> = new Set(["outbound_review", "outbound_send"]);
+
+export function isOutboundReviewCard(p: Pick<PendingApproval, "tool">): boolean {
+  return OUTBOUND_REVIEW_TOOLS.has(String(p.tool ?? "").replace(/^mcp__jarvis__/, ""));
+}
+
+/** Which click of the outbound two-step this card is (1 = review recipients and text, 2 = final send), or null. */
+export function outboundStep(p: Pick<PendingApproval, "tool">): 1 | 2 | null {
+  if (!isOutboundReviewCard(p)) return null;
+  return String(p.tool).replace(/^mcp__jarvis__/, "") === "outbound_send" ? 2 : 1;
+}
+
+/**
+ * The pending approval as the dashboard may show it. Every string is masked (the runtime masks too — this is idempotent,
+ * defence in depth) EXCEPT, on Roy's own local dashboard, the outbound review card's `fullText`: the full recipient and
+ * the exact text, because Roy must see exactly who and what he is approving (OB-10; the runtime leaves that one field
+ * unmasked for those two tools). Hosted mode, every other card, and everything that goes to events, audit or logs stay
+ * masked.
+ */
+export function redactApprovalForCard(p: PendingApproval, hosted: boolean): PendingApproval {
+  const exempt = !hosted && isOutboundReviewCard(p);
+  const out: PendingApproval = { ...p, tool: String(p.tool ?? ""), description: redact(String(p.description ?? "")) };
+  for (const k of ["action", "target", "effect", "cost", "category"] as const) if (typeof p[k] === "string") out[k] = redact(p[k] as string);
+  if (typeof p.fullText === "string") out.fullText = exempt ? p.fullText.slice(0, 4000) : redact(p.fullText);
+  else delete out.fullText;
   return out;
 }

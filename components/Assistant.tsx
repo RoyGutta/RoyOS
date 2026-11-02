@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { usePolling } from "./usePolling";
 import { askJarvis } from "./CommandBar";
+import ApprovalFullText from "./ApprovalFullText";
+import SignInToApprove from "./SignInToApprove";
+import { useApprovalSession } from "./useApprovalSession";
 import Orb, { moodFor } from "./Orb";
 import type { JarvisPayload } from "@/app/api/jarvis/route";
 import { STATE_LABEL, type Turn } from "@/lib/jarvis/events";
@@ -74,6 +77,7 @@ export default function Assistant() {
   useEffect(() => { try { setMotionOff(localStorage.getItem("jarvis.motion") === "off"); } catch { /* storage unavailable */ } }, []);
   const toggleMotion = () => { const next = !motionOff; setMotionOff(next); try { localStorage.setItem("jarvis.motion", next ? "off" : "on"); } catch { /* ignore */ } };
   const [deciding, setDeciding] = useState(false);
+  const session = useApprovalSession();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
   const turns = data?.turns ?? [];
@@ -97,9 +101,11 @@ export default function Assistant() {
   async function decide(kind: "approve" | "decline") {
     if (!pending?.id) { setNote({ ok: false, text: "This approval has no id; answer Jarvis by voice." }); return; }
     if (deciding) return;
+    if (!session.csrf) { setNote({ ok: false, text: "Sign in to approve." }); session.refresh(); return; }
     setDeciding(true);
-    const r = await askJarvis({ kind, approvalId: pending.id });
+    const r = await askJarvis({ kind, approvalId: pending.id }, session.csrf);
     setDeciding(false);
+    if (!r.ok) session.refresh();   // a 401 means the session ended: the panel switches to "Sign in to approve"
     setNote(r.ok ? { ok: true, text: kind === "approve" ? `Approved ${pending.id} — that one action only.` : "Declined." } : { ok: false, text: r.error ?? "failed" });
     inputRef.current?.focus();
   }
@@ -194,9 +200,12 @@ export default function Assistant() {
                 <dt>Reversible</dt><dd>{pending.reversible === true ? "yes" : pending.reversible === false ? "no" : "unknown"}</dd>
                 <dt>Bound to</dt><dd>{pending.id ?? "this action"}</dd>
               </dl>
+              <div className="mt-2"><ApprovalFullText pending={pending} /></div>
               <div className="flex gap-2 mt-2">
-                <button className="btn btn--primary" onClick={() => void decide("approve")} disabled={deciding}>Approve this action</button>
-                <button className="btn" onClick={() => void decide("decline")} disabled={deciding}>Decline</button>
+                {session.state === "signed-in" ? (<>
+                  <button className="btn btn--primary" onClick={() => void decide("approve")} disabled={deciding}>Approve this action</button>
+                  <button className="btn" onClick={() => void decide("decline")} disabled={deciding}>Decline</button>
+                </>) : <SignInToApprove session={session} next="/" />}
               </div>
             </div>
           )}

@@ -1,12 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { approvalHeaders } from "./useApprovalSession";
 
 export type AskResult = { ok: boolean; error?: string };
 
-export async function askJarvis(body: Record<string, unknown>): Promise<AskResult> {
+/** A command for the voice line. An approve/decline must carry the session-bound X-CSRF (useApprovalSession); the server
+ *  refuses it otherwise (G9-2). Plain asks and cancels carry none. */
+export async function askJarvis(body: Record<string, unknown>, csrf?: string | null): Promise<AskResult> {
   try {
-    const r = await fetch("/api/jarvis/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch("/api/jarvis/ask", { method: "POST", headers: approvalHeaders(csrf), body: JSON.stringify(body) });
     return (await r.json()) as AskResult;
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "request failed" };

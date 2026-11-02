@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readRuns, runSummary, type Run, VOICE_LINE } from "@/lib/jarvis/runs";
 import { buildActivity, buildTurns, type ActivityLine, type JarvisEvent, type Turn } from "@/lib/jarvis/events";
+import { redactApprovalForCard } from "@/lib/jarvis/redact";
+import { isHosted } from "@/lib/continuous/mode";
+import type { PendingApproval } from "@/lib/jarvis/types";
+export type { PendingApproval } from "@/lib/jarvis/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -18,11 +22,6 @@ const STATUS = path.join(VOICE_LINE, ".voice_status.json");
 const EVENTS = path.join(VOICE_LINE, ".voice_events.jsonl");
 const MAX_EVENTS = 40;
 
-export interface PendingApproval {
-  id?: string; tool: string; description: string;
-  category?: string; action?: string; target?: string; effect?: string; cost?: string; reversible?: boolean | null;
-  fullText?: string;   // the complete message when it does not fit in the description (read it before approving)
-}
 export interface JarvisPayload {
   running: boolean; state: string; detail: string; backgroundJobs: number;
   pendingApproval: PendingApproval | null; statusAgeSeconds: number | null;
@@ -72,7 +71,8 @@ export async function GET() {
   const summary = runSummary(runs);
   const payload: JarvisPayload = {
     running, state: running ? status?.state ?? "IDLE" : "OFFLINE", detail: status?.detail ?? "", backgroundJobs: status?.background_jobs ?? 0,
-    pendingApproval: running ? status?.pending_approval ?? null : null, statusAgeSeconds: age === null ? null : Math.round(age),
+    // OB-10: masked like everything else, except the outbound review card's recipients and exact text on Roy's local dashboard
+    pendingApproval: running && status?.pending_approval ? redactApprovalForCard(status.pending_approval, isHosted()) : null, statusAgeSeconds: age === null ? null : Math.round(age),
     brain: "claude-subscription", localModelInLoop: false, resumed,
     lastYou: last?.you ?? null, lastJarvis: last?.jarvis || null,
     turns, activity, actions: activity.filter((a) => a.kind !== "task").map((a) => ({ ts: a.ts, summary: a.summary })).slice(-8),

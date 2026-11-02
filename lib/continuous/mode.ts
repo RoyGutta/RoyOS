@@ -80,6 +80,17 @@ export function chooseStore(hostHeader: string | null | undefined): StoreChoice 
   return { kind: "file", dir: fileDir };
 }
 
+/**
+ * Where /login sends the browser afterwards: a page of this dashboard only, never an absolute or protocol-relative URL.
+ * Hosted builds serve the Continuous surface alone (middleware.ts); local mode adds the pages that carry approval buttons.
+ */
+export function loginNextPath(next: unknown, hosted: boolean): string {
+  const s = typeof next === "string" ? next : "";
+  if (/^\/(continuous|system|logout)$/.test(s)) return s;
+  if (!hosted && (s === "/" || /^\/(factory|content|command|agents)$/.test(s))) return s;
+  return "/continuous";
+}
+
 /** Cheap env-only check used by the middleware to fail closed before any handler runs. */
 export function hostedStoreConfigured(hostHeader: string | null | undefined): boolean {
   return chooseStore(hostHeader).kind !== "none";

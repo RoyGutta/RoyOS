@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { approvalOriginGuard, localWriteGuard, rateLimiter } from "@/lib/jarvis/guard";
+import { localWriteGuard, rateLimiter } from "@/lib/jarvis/guard";
 import fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 
 import { VOICE_LINE } from "@/lib/jarvis/runs";
 import { redact } from "@/lib/jarvis/redact";
 import { signApproval } from "@/lib/jarvis/approvalAuth";
+import { requireApprovalSession } from "@/lib/jarvis/approvalSession";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,8 @@ const APPROVAL_ID = /^apr_[a-f0-9]{6,12}$/;
  *   {kind:"approve", approvalId} → a "yes" bound to ONE pending action (ignored if stale)
  *   {kind:"decline", approvalId} → drops that pending action
  *   {kind:"cancel"}              → interrupts whatever is running
+ * approve and decline are Roy's decisions: they need his Continuous Mode session + X-CSRF + the approval-grade origin
+ * guard (G9-2); a yes is then signed (apr:<id>) and the runtime refuses an unsigned one.
  * 409 when the voice line is not running: nothing is queued for later.
  */
 const approvalBucket = rateLimiter(20, 60_000);
@@ -41,10 +43,8 @@ export async function POST(req: Request) {
     rec.text = redact(text); // a pasted secret never reaches the inbox file or the model
   } else if (kind === "approve" || kind === "decline") {
     if (!APPROVAL_ID.test(body.approvalId ?? "")) return NextResponse.json({ ok: false, error: "approvalId required" }, { status: 400 });
-    // a browser always sends Origin on a cross-document fetch POST; a local shell script normally does not.
-    // This is a speed bump, not the boundary: the boundary is the model's sandboxed shell (see SECURITY-BASELINE §1).
-    const refusedApproval = approvalOriginGuard(req);       // origin first: a forged attempt must not spend Roy's rate budget
-    if (refusedApproval) return refusedApproval;
+    const gate = await requireApprovalSession(req);       // session first: a forged attempt must not spend Roy's rate budget, and nothing is signed before it
+    if (!gate.ok) return gate.res;
     const limitedApproval = approvalBucket(); if (limitedApproval) return limitedApproval;
     rec.approvalId = body.approvalId;
     if (kind === "approve") rec.auth = signApproval(`apr:${body.approvalId}`);   // the runtime refuses an unsigned yes

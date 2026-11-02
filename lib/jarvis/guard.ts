@@ -25,10 +25,13 @@ export function localOriginGuard(req: Request): NextResponse | null {
 }
 
 /**
- * Approval-grade guard: a request that will SIGN an approval must come from the dashboard page itself in a browser —
- * Origin present (not "null"), its host:port identical to this request's Host, and Sec-Fetch-Site exactly "same-origin"
- * (a page on another local port is only "same-site"). Local scripts, curl and project subprocesses never pass this; the
- * runtime additionally refuses an unsigned yes, so this is defence in depth, not the only check.
+ * Approval-grade origin guard: a request that will SIGN an approval must look like a fetch from the dashboard page itself
+ * in a browser — Origin present (not "null"), its host:port identical to this request's Host, and Sec-Fetch-Site exactly
+ * "same-origin" (a page on another local port is only "same-site"). This stops BROWSERS: a page on another origin cannot
+ * set those headers. It does not stop a local script — curl -H, a Node script or any unsandboxed process CAN forge Origin
+ * and Sec-Fetch-Site (Sidebar G9-2). What binds a click to Roy is the Continuous Mode session plus the session-bound
+ * X-CSRF header (lib/jarvis/approvalSession.ts requireApprovalSession), which every signing route requires on top of
+ * this guard; the runtime additionally refuses an unsigned yes.
  */
 export function approvalOriginGuard(req: Request): NextResponse | null {
   const refused = localOriginGuard(req);

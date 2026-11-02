@@ -1,16 +1,17 @@
 import { redirect } from "next/navigation";
 import LoginForm from "@/components/LoginForm";
-import { isHosted } from "@/lib/continuous/mode";
+import { isHosted, loginNextPath } from "@/lib/continuous/mode";
 import { pageSession } from "@/lib/continuous/serverSession";
 
 export const dynamic = "force-dynamic";
 
-/** Sign in: passphrase (both modes) plus a 6-digit authenticator code when hosted. */
+/** Sign in: passphrase (both modes) plus a 6-digit authenticator code when hosted. `next` is a page of this dashboard
+ *  (the approval buttons link here with their own page), never an outside URL. */
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const auth = await pageSession();
-  if (auth.ok) redirect("/continuous");
   const sp = await searchParams;
-  const next = typeof sp.next === "string" && /^\/(continuous|system|logout)$/.test(sp.next) ? sp.next : "/continuous";
+  const next = loginNextPath(sp.next, isHosted());
+  if (auth.ok) redirect(next);
   const problem = auth.reason === "config" || auth.reason === "store" ? auth.message : null;
   return (
     <main className="min-h-screen p-3 sm:p-5 max-w-[480px] mx-auto flex flex-col gap-4">

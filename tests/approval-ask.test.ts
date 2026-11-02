@@ -1,0 +1,101 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import { hmacHex } from "../lib/continuous/crypto";
+import { BROWSER, approvalFixture, get, post, type ApprovalFixture } from "./approvalHelpers";
+
+/**
+ * The Jarvis inbox route and the Jarvis status route read the voice line's files: this file points them at a temp
+ * directory BEFORE the modules load (JARVIS_VOICE_LINE is read once, at import), so nothing here touches ~/Developer/Jarvis.
+ */
+const VL = fs.mkdtempSync(path.join(os.tmpdir(), "jl-voice-line-"));
+process.env.JARVIS_VOICE_LINE = VL;
+const STATUS = path.join(VL, ".voice_status.json");
+const INBOX = path.join(VL, ".voice_inbox.jsonl");
+let ask: (req: Request) => Promise<Response>;
+let status: () => Promise<Response>;
+let fx: ApprovalFixture;
+
+const PHONE = "+15550000001";
+const OUTBOUND_TEXT = `STEP 1 of 2 — check before anything is sent. App: Messages. To: Alex Kim <${PHONE}>. Exact text: «Courts at 6? Call me on +1 555 000 0002». Is this recipient list and text exactly right?`;
+const card = (tool: string) => ({ id: "apr_abc123", tool, description: "Asking Roy to confirm recipients and text (step 1 of 2)", category: "send", target: PHONE, effect: "a message reaches people outside this machine", cost: "none known", reversible: false, fullText: OUTBOUND_TEXT });
+const writeStatus = (pending: Record<string, unknown> | null) => fs.writeFileSync(STATUS, JSON.stringify({ state: pending ? "WAITING_FOR_APPROVAL" : "IDLE", detail: "", background_jobs: 0, pending_approval: pending, ts: Date.now() / 1000 }));
+const inboxLines = () => (fs.existsSync(INBOX) ? fs.readFileSync(INBOX, "utf-8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) : []);
+
+before(async () => {
+  ({ POST: ask } = await import("../app/api/jarvis/ask/route"));
+  ({ GET: status } = await import("../app/api/jarvis/route"));
+  fx = await approvalFixture();
+  writeStatus(card("mcp__jarvis__outbound_review"));
+});
+after(() => { fx.teardown(); fs.rmSync(VL, { recursive: true, force: true }); });
+
+test("G9-2 Jarvis inbox: an approve or decline without Roy's session, without X-CSRF or with a forged origin is refused and nothing reaches the inbox", async () => {
+  const cases: [string, Record<string, string>, number][] = [
+    ["no session (forged Origin + Sec-Fetch-Site only)", BROWSER, 401],
+    ["session without X-CSRF", { ...BROWSER, cookie: fx.cookie }, 403],
+    ["wrong X-CSRF", { ...BROWSER, cookie: fx.cookie, "x-csrf": "c".repeat(64) }, 403],
+    ["same-site origin", { ...fx.withSession, origin: "http://localhost:4318" }, 403],
+    ["cross-site fetch", { ...fx.withSession, "sec-fetch-site": "cross-site" }, 403],
+  ];
+  for (const kind of ["approve", "decline"]) for (const [label, headers, st] of cases) {
+    const res = await ask(post("/api/jarvis/ask", { kind, approvalId: "apr_abc123" }, headers));
+    assert.equal(res.status, st, `${kind}: ${label}`);
+  }
+  assert.equal(fx.signed.length, 0, "signed nothing");
+  assert.equal(fs.existsSync(INBOX), false, "nothing written to the inbox");
+});
+
+test("Jarvis inbox: with Roy's session an approve is signed apr:<id> into the inbox; a decline carries no signature; a plain ask needs no session", async () => {
+  let res = await ask(post("/api/jarvis/ask", { kind: "approve", approvalId: "apr_abc123" }, fx.withSession));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, kind: "approve" });
+  assert.deepEqual(fx.signed, ["apr:apr_abc123"]);
+  let lines = inboxLines();
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].kind, "approve"); assert.equal(lines[0].approvalId, "apr_abc123"); assert.equal(lines[0].source, "dashboard");
+  assert.equal(lines[0].auth, hmacHex(fx.key, "apr:apr_abc123"));
+
+  res = await ask(post("/api/jarvis/ask", { kind: "decline", approvalId: "apr_abc123" }, fx.withSession));
+  assert.equal(res.status, 200);
+  lines = inboxLines();
+  assert.equal(lines.length, 2); assert.equal(lines[1].kind, "decline"); assert.equal("auth" in lines[1], false);
+  assert.equal(fx.signed.length, 1, "a decline signs nothing");
+
+  res = await ask(post("/api/jarvis/ask", { text: "what should I work on?" }, BROWSER));
+  assert.equal(res.status, 200);
+  lines = inboxLines();
+  assert.equal(lines.length, 3); assert.equal(lines[2].kind, "ask"); assert.equal("auth" in lines[2], false);
+});
+
+test("OB-10: GET /api/jarvis shows the outbound review card's fullText unmasked (full recipient and exact text) and masks every other field", async () => {
+  for (const tool of ["mcp__jarvis__outbound_review", "outbound_review", "mcp__jarvis__outbound_send"]) {
+    writeStatus(card(tool));
+    const j = (await (await status()).json()) as { pendingApproval: Record<string, unknown> | null };
+    const p = j.pendingApproval!;
+    assert.equal(p.fullText, OUTBOUND_TEXT, `${tool}: fullText verbatim`);
+    assert.ok(String(p.fullText).includes(PHONE) && String(p.fullText).includes("+1 555 000 0002"), `${tool}: numbers visible`);
+    assert.equal(p.target, "[redacted-phone]", `${tool}: the target field stays masked`);
+    assert.equal(p.description, "Asking Roy to confirm recipients and text (step 1 of 2)");
+    assert.equal(p.id, "apr_abc123");
+  }
+});
+
+test("OB-10: the exception covers only that card — any other tool's fullText is masked, and hosted mode masks the outbound card too", async () => {
+  for (const tool of ["mcp__jarvis__telephony_execute", "Bash", "mcp__jarvis__outbound_prepare", "outbound_review_extra", ""]) {
+    writeStatus(card(tool));
+    const p = ((await (await status()).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
+    assert.ok(!String(p.fullText).includes(PHONE) && String(p.fullText).includes("[redacted-phone]"), `${tool || "(no tool)"}: masked`);
+    assert.equal(p.target, "[redacted-phone]");
+  }
+  process.env.JARVIS_HOSTED = "1";
+  try {
+    writeStatus(card("mcp__jarvis__outbound_review"));
+    const p = ((await (await status()).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
+    assert.ok(!String(p.fullText).includes(PHONE) && String(p.fullText).includes("[redacted-phone]"), "hosted: masked");
+  } finally { delete process.env.JARVIS_HOSTED; }
+  writeStatus(null);
+  assert.equal(((await (await status()).json()) as { pendingApproval: unknown }).pendingApproval, null);
+});

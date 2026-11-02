@@ -22,6 +22,18 @@ export interface Task extends Omit<Run, "approval" | "verification"> {
   cancelRequested: boolean; retries: number; maxRetries: number; depth: number; events: { at: string; what: string }[];
   approval: { id: string; description: string; granted?: boolean; tool?: string; resolved?: "approved" | "declined" | null } | null;
 }
+/**
+ * The voice line's pending approval (.voice_status.json pending_approval), as the dashboard shows it. `fullText` is the
+ * complete message when it does not fit in the description (read it before approving). OB-10: for the outbound review
+ * card (tool outbound_review = step 1 of 2, outbound_send = step 2 of 2) the runtime leaves fullText UNMASKED — the full
+ * recipient (name and address or number) and the exact text — and lib/jarvis/redact.ts keeps that exception to that one
+ * card on Roy's local dashboard; it never reaches events, audit or logs.
+ */
+export interface PendingApproval {
+  id?: string; tool: string; description: string;
+  category?: string; action?: string; target?: string; effect?: string; cost?: string; reversible?: boolean | null;
+  fullText?: string;
+}
 export interface AgentInfo {
   id: string; name: string; responsibility: string; writeRoots: string[]; tools: string[]; bash: string; configVersion: string;
   sessionId: string | null; sessionAt: number; status: string; currentTaskId: string | null; parentRunId: string | null;

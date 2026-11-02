@@ -18,6 +18,7 @@ export interface ContentItem {
   render: { status: string; startedAt?: string; finishedAt?: string; seconds?: number; video?: string; captions?: string; thumbnail?: string; error?: string; tts?: { engine: string; seconds: number; voice: string }; alignment?: { method: string; matched?: number; total?: number }; narrationSeconds?: number };
   qa: { status: string; checks: { name: string; ok: boolean; detail: string }[]; at?: string; duration?: number; lufs?: number };
   approval: { status: string; by?: string; at?: string; note?: string };
+  reviewVersion?: string;   // sha256 the runtime sets when the item enters APPROVAL: what the card shows and both clicks sign (G9-5)
   schedule: { publishAt: string | null };
   publish: Record<string, PublishRec>;
   metrics: Metric[]; history: { at: string; from: string | null; to: string; by: string; note: string }[];

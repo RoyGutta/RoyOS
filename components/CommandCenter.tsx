@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { usePolling } from "./usePolling";
 import CommandBar, { askJarvis } from "./CommandBar";
+import ApprovalFullText from "./ApprovalFullText";
+import SignInToApprove from "./SignInToApprove";
+import { useApprovalSession } from "./useApprovalSession";
 import type { JarvisPayload } from "@/app/api/jarvis/route";
 import type { Run } from "@/lib/jarvis/types";
 import type { Attention } from "@/lib/business/store";
@@ -63,6 +66,7 @@ export default function CommandCenter() {
   const s = usePolling<SystemPayload>("/api/system", 12000);
   const [prefill, setPrefill] = useState("");
   const [approvalMsg, setApprovalMsg] = useState<string | null>(null);
+  const session = useApprovalSession();
 
   const data = j.data;
   const running = data?.running ?? false;
@@ -77,7 +81,9 @@ export default function CommandCenter() {
 
   async function decide(kind: "approve" | "decline") {
     if (!pending?.id) { setApprovalMsg("This approval has no id (older voice line); say yes or no to Jarvis directly."); return; }
-    const res = await askJarvis({ kind, approvalId: pending.id });
+    if (!session.csrf) { setApprovalMsg("Sign in to approve."); session.refresh(); return; }
+    const res = await askJarvis({ kind, approvalId: pending.id }, session.csrf);
+    if (!res.ok) session.refresh();   // a 401 means the session ended: the card switches to "Sign in to approve"
     setApprovalMsg(res.ok ? (kind === "approve" ? "Approved — Jarvis will run it now." : "Declined.") : res.error ?? "failed");
   }
 
@@ -142,15 +148,12 @@ export default function CommandCenter() {
             <div className="border border-warn/50 rounded p-3 mb-3">
               <div className="eyebrow text-warn mb-1">Approval requested</div>
               <div className="text-ink mb-2">{pending.description}</div>
-              {pending.fullText ? (
-                <div className="mb-2">
-                  <div className="text-[11px] text-muted mb-1">Full text you are approving ({pending.fullText.length} characters)</div>
-                  <pre className="text-[12px] whitespace-pre-wrap break-words max-h-48 overflow-y-auto border border-line rounded p-2" tabIndex={0} aria-label="Full text of the message you are approving">{pending.fullText}</pre>
-                </div>
-              ) : null}
+              <ApprovalFullText pending={pending} />
               <div className="flex gap-2 items-center flex-wrap">
-                <button className="btn btn--primary" onClick={() => decide("approve")}>Approve this action</button>
-                <button className="btn" onClick={() => decide("decline")}>Decline</button>
+                {session.state === "signed-in" ? (<>
+                  <button className="btn btn--primary" onClick={() => decide("approve")}>Approve this action</button>
+                  <button className="btn" onClick={() => decide("decline")}>Decline</button>
+                </>) : <SignInToApprove session={session} next="/command" />}
                 <span className="text-muted text-[11px]">bound to {pending.id ?? "this action"} only</span>
               </div>
               {approvalMsg && <div className="text-[11px] mt-2 text-online" role="status">{approvalMsg}</div>}
