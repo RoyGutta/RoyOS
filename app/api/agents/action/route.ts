@@ -29,6 +29,7 @@ export async function POST(req: Request) {
   const b = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const task = typeof b.task === "string" && TASK.test(b.task) ? b.task : null;
   let args: string[] | null = null;
+  let stdin: string | null = null;
   if (b.action === "enqueue" && (AGENT_IDS as readonly string[]).includes(String(b.agent)) && typeof b.request === "string" && b.request.trim().length >= 20) {
     args = ["enqueue", "--agent", String(b.agent), "--request", b.request.slice(0, 4000), "--by", "dashboard"];
     if (typeof b.title === "string" && b.title.trim()) args.push("--title", b.title.slice(0, 120));
@@ -47,10 +48,10 @@ export async function POST(req: Request) {
     const gate = await requireApprovalSession(req);     // G9-2: session + X-CSRF + origin, before anything is signed
     if (!gate.ok) return gate.res;
     if (!task || typeof b.approvalId !== "string" || !APR.test(b.approvalId)) return NextResponse.json({ ok: false, error: "invalid action" }, { status: 400 });
-    // The signature still travels in argv here: scheduler.py approve has no --auth-stdin yet (G9-4 residual).
-    args = ["approve", task, b.approvalId, "--by", "dashboard", "--auth", signApproval(`task:${task}:${b.approvalId}`)];
+    stdin = JSON.stringify({ sig: signApproval(`task:${task}:${b.approvalId}`) });      // on stdin, never argv (Sidebar G9v2-3)
+    args = ["approve", task, b.approvalId, "--by", "dashboard", "--auth-stdin"];
   }
   if (!args) return NextResponse.json({ ok: false, error: "invalid action" }, { status: 400 });
-  const parsed = parseCliJson(await runCli("scheduler.py", args, null, { timeoutMs: 180_000, maxBuffer: 2_000_000 }), "scheduler.py");
+  const parsed = parseCliJson(await runCli("scheduler.py", args, stdin, { timeoutMs: 180_000, maxBuffer: 2_000_000 }), "scheduler.py");
   return NextResponse.json(parsed, { status: parsed.ok ? 200 : 409 });
 }

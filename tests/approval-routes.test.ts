@@ -179,13 +179,20 @@ test("G9-5 content: a missing or malformed version is 400 before anything is sig
   nothingHappened("bad version");
 });
 
-test("agents approve: needs the session, then still passes --auth in argv (scheduler.py has no --auth-stdin yet: G9-4 residual)", async () => {
+test("factory approve-plan: one click, needs the session, hands factory.py {sig} on stdin — never argv (Sidebar G9v2-3)", async () => {
+  const res = await factoryPost(post("/api/factory", { action: "approve-plan", project: "wf_abc123", planHash: "abcdef012345" }, fx.withSession));
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls[0].args, ["approve-plan", "wf_abc123", "--by", "dashboard", "--plan-hash", "abcdef012345", "--auth-stdin"]);
+  assert.deepEqual(JSON.parse(calls[0].stdin ?? "null"), { sig: hmacHex(fx.key, "plan:wf_abc123:abcdef012345") });
+});
+
+test("agents approve: needs the session, then hands scheduler.py {sig} on stdin — never argv (Sidebar G9v2-3)", async () => {
   const res = await agentsPost(post("/api/agents/action", { action: "approve", task: "task_abc123", approvalId: "apr_abc123" }, fx.withSession));
   assert.equal(res.status, 200);
   assert.deepEqual(fx.signed, ["task:task_abc123:apr_abc123"]);
   assert.equal(calls[0].script, "scheduler.py");
-  assert.deepEqual(calls[0].args, ["approve", "task_abc123", "apr_abc123", "--by", "dashboard", "--auth", hmacHex(fx.key, "task:task_abc123:apr_abc123")]);
-  assert.equal(calls[0].stdin, null);
+  assert.deepEqual(calls[0].args, ["approve", "task_abc123", "apr_abc123", "--by", "dashboard", "--auth-stdin"]);
+  assert.deepEqual(JSON.parse(calls[0].stdin ?? "null"), { sig: hmacHex(fx.key, "task:task_abc123:apr_abc123") });
 });
 
 test("GET /api/auth/session: 401 without a session or with a forged cookie; 200 with the session's CSRF value", async () => {

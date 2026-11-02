@@ -49,8 +49,11 @@ export async function POST(req: Request) {
     await fs.writeFile(tmp, JSON.stringify(b.brief).slice(0, 60_000));   // client data, stored as given; secret-shaped values are a gate finding, not silently rewritten
     args = ["start", tmp, "--by", "dashboard"];
   } else if (b.action === "answer" && project && b.answers && typeof b.answers === "object") args = ["answer", project, JSON.stringify(b.answers).slice(0, 20_000)];
-  // approve-plan still carries its signature in argv: factory.py approve-plan has no --auth-stdin yet (G9-4 residual).
-  else if (b.action === "approve-plan" && project && typeof b.planHash === "string" && /^[a-f0-9]{12}$/.test(b.planHash)) args = ["approve-plan", project, "--by", "dashboard", "--plan-hash", b.planHash, "--auth", signApproval(`plan:${project}:${b.planHash}`)];
+  // approve-plan: one click; its signature goes on stdin like the others (Sidebar G9v2-3)
+  else if (b.action === "approve-plan" && project && typeof b.planHash === "string" && /^[a-f0-9]{12}$/.test(b.planHash)) {
+    stdin = JSON.stringify({ sig: signApproval(`plan:${project}:${b.planHash}`) });
+    args = ["approve-plan", project, "--by", "dashboard", "--plan-hash", b.planHash, "--auth-stdin"];
+  }
   // Roy's TWO tier: deploying is two separate clicks. Click 1 signs first:deploy:…:<nonce>:<issuedAt> (recorded by the
   // runtime) and returns the nonce; click 2 echoes it and signs deploy:…:<nonce>:<issuedAt2>, accepted only with that first
   // confirmation 2 s – 5 min old. Both signatures go on stdin, never argv (docs/APPROVALS-TWO-CLICK.md).
