@@ -32,7 +32,7 @@ test("G9-2: every signing route refuses without a session, without X-CSRF, with 
     ["factory approve-deploy", (h) => factoryPost(post("/api/factory", { action: "approve-deploy", project: "wf_abc123", siteHash: HASH, nonce: "0".repeat(32) }, h))],
     ["factory approve-plan", (h) => factoryPost(post("/api/factory", { action: "approve-plan", project: "wf_abc123", planHash: "abcdef012345" }, h))],
     ["content approve-first", (h) => contentPost(post("/api/content/action", { action: "approve-first", id: "cnt_abc123", version: VERSION }, h))],
-    ["content approve", (h) => contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: VERSION, nonce: "0".repeat(32) }, h))],
+    ["content approve", (h) => contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: VERSION, nonce: "0".repeat(32), at: "2026-11-03T15:00-05:00" }, h))],
     ["agents approve", (h) => agentsPost(post("/api/agents/action", { action: "approve", task: "task_abc123", approvalId: "apr_abc123" }, h))],
   ];
   const cases: [string, Record<string, string>, number][] = [
@@ -146,22 +146,28 @@ test("G9-5 content: the version comes from the request (the one the card display
   assert.deepEqual(fx.signed, [`first:content:cnt_abc123:${VERSION}:${j1.nonce}:${a1.issuedAt}`]);
   assert.equal(a1.sig, hmacHex(fx.key, fx.signed[0]));
 
-  res = await contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: VERSION, nonce: j1.nonce, at: "2026-11-03T15:00", note: "go" }, fx.withSession));
+  // G9v2-1: click 2 must carry the publish time it confirms, with its UTC offset — refused (nothing signed) otherwise
+  for (const at of [undefined, "", "2026-11-03T15:00", "tomorrow", 1762200000]) {
+    res = await contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: VERSION, nonce: j1.nonce, at }, fx.withSession));
+    assert.equal(res.status, 400, String(at)); assert.match(((await res.json()) as { error: string }).error, /UTC offset/);
+  }
+  assert.equal(calls.length, 1); assert.equal(fx.signed.length, 1);
+  res = await contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: VERSION, nonce: j1.nonce, at: "2026-11-03T15:00-05:00", note: "go" }, fx.withSession));
   assert.equal(res.status, 200);
-  assert.deepEqual(calls[1].args, ["approve", "cnt_abc123", "--stage", "second", "--version", VERSION, "--by", "dashboard", "--auth-stdin", "--at", "2026-11-03T15:00", "--note", "go"]);
+  assert.deepEqual(calls[1].args, ["approve", "cnt_abc123", "--stage", "second", "--version", VERSION, "--by", "dashboard", "--auth-stdin", "--at", "2026-11-03T15:00-05:00", "--note", "go"]);
   const a2 = JSON.parse(calls[1].stdin ?? "null") as { sig: string; nonce: string; issuedAt: number };
   assert.equal(a2.nonce, j1.nonce);
-  assert.equal(fx.signed[1], `content:cnt_abc123:${VERSION}:${j1.nonce}:${a2.issuedAt}`);
+  assert.equal(fx.signed[1], `content:cnt_abc123:${VERSION}|at=2026-11-03T15:00-05:00:${j1.nonce}:${a2.issuedAt}`);
   assert.equal(a2.sig, hmacHex(fx.key, fx.signed[1]));
   assert.ok(calls.every((c) => c.args[0] !== "version"), "no server-side 'read the current version' step");
   assert.ok(calls.every((c) => !c.args.includes("--auth") && !c.args.some((a) => /^[a-f0-9]{64}$/.test(a) && a !== VERSION)), "no signature in argv");
 
   // A different displayed version on click 2 is signed as sent: the runtime, not the dashboard, decides it no longer matches.
   const V2 = "fedcba9876543210".repeat(4);
-  res = await contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: V2, nonce: j1.nonce }, fx.withSession));
+  res = await contentPost(post("/api/content/action", { action: "approve", id: "cnt_abc123", version: V2, nonce: j1.nonce, at: "2026-11-03T15:00Z" }, fx.withSession));
   assert.equal(res.status, 200);
   assert.ok(calls[2].args.includes(V2) && !calls[2].args.includes(VERSION));
-  assert.match(fx.signed[2], new RegExp(`^content:cnt_abc123:${V2}:${j1.nonce}:\\d+$`));
+  assert.match(fx.signed[2], new RegExp(`^content:cnt_abc123:${V2}\\|at=2026-11-03T15:00Z:${j1.nonce}:\\d+$`));
 });
 
 test("G9-5 content: a missing or malformed version is 400 before anything is signed", async () => {

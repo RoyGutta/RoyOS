@@ -24,17 +24,24 @@ function Panel({ title, sub, children }: { title: string; sub?: string; children
   );
 }
 
-type ActResult = { status: number; ok?: boolean; error?: string; nonce?: string };
+type ActResult = { status: number; ok?: boolean; error?: string; nonce?: string; publishAt?: string };
 /** The two approve actions must carry the session-bound X-CSRF; the server refuses them otherwise (G9-2). */
 async function act(body: Record<string, unknown>, csrf?: string | null): Promise<ActResult> {
   try {
     const r = await fetch("/api/content/action", { method: "POST", headers: approvalHeaders(csrf), body: JSON.stringify(body) });
-    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string; nonce?: string };
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string; nonce?: string; publishAt?: string };
     return { status: r.status, ...j };
   } catch (e) { return { status: 0, ok: false, error: e instanceof Error ? e.message : "request failed" }; }
 }
 const said = (j: ActResult) => (j.ok ? "done" : j.error ?? "failed");
 const VERSION = /^[a-f0-9]{64}$/;
+/** A datetime-local value ("2026-11-03T15:00") with the browser's UTC offset for THAT date, so the signed time is one instant. */
+function withOffset(local: string): string | null {
+  const d = new Date(local);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local) || Number.isNaN(d.getTime())) return null;
+  const off = -d.getTimezoneOffset(), abs = Math.abs(off);
+  return `${local}${off >= 0 ? "+" : "-"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}
 
 function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => void; session: ApprovalSession }) {
   const [at, setAt] = useState("");
@@ -42,7 +49,7 @@ function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => v
   const [rights, setRights] = useState(c.source?.rights ?? "UNKNOWN");
   const [rightsNote, setRightsNote] = useState("");
   // Roy's TWO tier: the nonce from click 1 lives here, for THIS item and displayed version only, until click 2 succeeds.
-  const [first, setFirst] = useState<{ id: string; version: string; nonce: string } | null>(null);
+  const [first, setFirst] = useState<{ id: string; version: string; nonce: string; publishAt: string | null } | null>(null);
   const s = c.script;
   const failed = c.qa.checks.filter((k) => !k.ok);
   // G9-5: the version Roy SEES is the one both clicks sign; the runtime refuses it when the item changed since.
@@ -57,12 +64,15 @@ function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => v
   async function approveFirst() {
     if (!version) return;
     const j = await approve({ action: "approve-first", id: c.id, version });
-    setFirst(j.ok && typeof j.nonce === "string" ? { id: c.id, version, nonce: j.nonce } : null);
+    setFirst(j.ok && typeof j.nonce === "string" ? { id: c.id, version, nonce: j.nonce, publishAt: typeof j.publishAt === "string" ? j.publishAt : null } : null);
     onMsg(j.ok ? "1 of 2 recorded — confirm at least 2 s and at most 5 min later" : said(j));
   }
+  // G9v2-1: click 2 signs the publish time it confirms — the one Roy picked, else the one click 1 proposed
+  const confirmAt = at ? withOffset(at) : first?.publishAt ?? null;
   async function approveSecond() {
     if (!firstDone || !version || !first) return;
-    const j = await approve({ action: "approve", id: c.id, version, nonce: first.nonce, at: at || undefined, note });
+    if (!confirmAt) { onMsg("pick a publish time"); return; }
+    const j = await approve({ action: "approve", id: c.id, version, nonce: first.nonce, at: confirmAt, note });
     if (j.ok) setFirst(null);
     onMsg(said(j));
   }
@@ -112,7 +122,8 @@ function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => v
               <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note (required to reject)" className="flex-1 bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
               {!signedIn && <SignInToApprove session={session} next="/content" />}
               {signedIn && !firstDone && <button className="chip text-muted disabled:opacity-50" disabled={!version} onClick={() => void approveFirst()}>Approve (1 of 2)</button>}
-              {signedIn && firstDone && <button className="chip text-online disabled:opacity-50" disabled={!version} onClick={() => void approveSecond()}>Confirm publish (2 of 2)</button>}
+              {signedIn && firstDone && <button className="chip text-online disabled:opacity-50" disabled={!version || !confirmAt} onClick={() => void approveSecond()}>Confirm publish (2 of 2)</button>}
+              {signedIn && firstDone && <span className="text-muted text-[11px]">publishes at {confirmAt ?? "— pick a time"}</span>}
               <button className="chip text-offline" onClick={async () => onMsg(note ? said(await act({ action: "reject", id: c.id, note })) : "a note is required to reject")}>Reject</button>
             </div>
           </div>
@@ -121,7 +132,7 @@ function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => v
           <div className="border border-line rounded p-3 flex flex-wrap gap-2 items-center">
             <span className="text-ink text-[12px]">Queued for {c.schedule.publishAt} · approved by {c.approval.by}</span>
             <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
-            <button className="chip text-muted" onClick={async () => onMsg(at ? said(await act({ action: "queue", id: c.id, at })) : "pick a time")}>Move</button>
+            <button className="chip text-muted" title="the publish time is part of the approval: moving it sends the item back for two new confirmations" onClick={async () => onMsg(at ? said(await act({ action: "queue", id: c.id, at })) : "pick a time")}>Move (approve again)</button>
             <button className="chip text-offline" onClick={async () => onMsg(said(await act({ action: "reject", id: c.id, note: note || "pulled from queue" })))}>Pull</button>
           </div>
         )}

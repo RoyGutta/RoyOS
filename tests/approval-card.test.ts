@@ -50,6 +50,8 @@ test("two clicks: click 1 mints a 32-hex nonce and a unix-seconds issuedAt and s
     assert.equal(c2.nonce, c1.nonce); assert.equal(c2.issuedAt, 1_800_000_003);
     assert.deepEqual(JSON.parse(c2.stdin), { sig: hmacHex(key, `${scope}:${c1.nonce}:1800000003`), nonce: c1.nonce, issuedAt: 1_800_000_003 });
     assert.deepEqual(signed, [`first:${scope}:${c1.nonce}:1800000000`, `${scope}:${c1.nonce}:1800000003`]);
+    const c2b = secondClick("content:cnt_abc123:" + "a".repeat(64), c1.nonce, 1_800_000_004_000, "|at=2026-11-03T15:00-05:00");   // G9v2-1
+    assert.equal(signed.pop(), `content:cnt_abc123:${"a".repeat(64)}|at=2026-11-03T15:00-05:00:${c1.nonce}:1800000004`); assert.equal(c2b.nonce, c1.nonce);
     assert.throws(() => secondClick(scope, "nope"), /32 hex/);
     assert.throws(() => secondClick(scope, c1.nonce.toUpperCase()), /32 hex/);
     assert.equal(signed.length, 2, "a refused click 2 signs nothing");

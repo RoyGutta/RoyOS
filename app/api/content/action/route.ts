@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireApprovalSession } from "@/lib/jarvis/approvalSession";
 import { parseCliJson, runCli } from "@/lib/jarvis/cli";
 import { localWriteGuard, rateLimiter } from "@/lib/jarvis/guard";
-import { CONTENT_VERSION, NONCE, firstClick, secondClick } from "@/lib/jarvis/twoClick";
+import { AT_WITH_OFFSET, CONTENT_VERSION, NONCE, firstClick, secondClick } from "@/lib/jarvis/twoClick";
 
 export const dynamic = "force-dynamic";
 
@@ -10,11 +10,13 @@ export const dynamic = "force-dynamic";
  * POST /api/content/action — the dashboard's ONE write path into the Content OS.
  * It shells out to content_os.py so the file lock, prerequisites and audit log are
  * the same code Jarvis and the worker use. Explicit human actions only:
- *   {action:"approve-first", id, version} → {ok, nonce}            click 1 of 2 (signs first:content:<id>:<version>:…)
- *   {action:"approve", id, version, nonce, at?, note?}             click 2 of 2 (--stage second; signs content:<id>:<version>:…)
+ *   {action:"approve-first", id, version} → {ok, nonce, publishAt}  click 1 of 2 (signs first:content:<id>:<version>:…)
+ *   {action:"approve", id, version, nonce, at, note?}              click 2 of 2 (--stage second; signs content:<id>:<version>|at=<at>:…)
  *   {action:"reject", id, note} | {action:"pause", on:boolean} | {action:"queue", id, at} | {action:"rights", id, state, note}
  * `version` is the reviewVersion the card DISPLAYED (G9-5): the browser sends it with both clicks, the signature binds it,
- * and content_os.py refuses it when the item changed since. The two approve actions need Roy's session + X-CSRF (G9-2).
+ * and content_os.py refuses it when the item changed since. `at` is the publish time click 2 confirms, with its UTC offset
+ * (the time Roy picked, or click 1's proposal); it is signed too (G9v2-1), so the store cannot move it.
+ * The two approve actions need Roy's session + X-CSRF (G9-2).
  */
 const ID = /^cnt_[a-f0-9]{6,16}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?$/;
@@ -43,9 +45,9 @@ export async function POST(req: Request) {
       args = ["approve", b.id, "--stage", "first", "--version", b.version, "--by", by, "--auth-stdin"];
     } else {
       if (typeof b.nonce !== "string" || !NONCE.test(b.nonce)) return NextResponse.json({ ok: false, error: "click 1 first: the confirmation needs the nonce returned by \"Approve (1 of 2)\"" }, { status: 400 });
-      stdin = secondClick(scope, b.nonce).stdin;
-      args = ["approve", b.id, "--stage", "second", "--version", b.version, "--by", by, "--auth-stdin"];
-      if (b.at && ISO.test(b.at)) args.push("--at", b.at);
+      if (typeof b.at !== "string" || !AT_WITH_OFFSET.test(b.at)) return NextResponse.json({ ok: false, error: "click 2 needs the publish time shown with it, with its UTC offset; nothing signed" }, { status: 400 });
+      stdin = secondClick(scope, b.nonce, Date.now(), `|at=${b.at}`).stdin;
+      args = ["approve", b.id, "--stage", "second", "--version", b.version, "--by", by, "--auth-stdin", "--at", b.at];
       if (b.note) args.push("--note", b.note.slice(0, 300));
     }
   } else if (b.action === "reject" && b.id && ID.test(b.id) && b.note) {
