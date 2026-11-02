@@ -21,14 +21,17 @@ export const dynamic = "force-dynamic";
 const ID = /^cnt_[a-f0-9]{6,16}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?$/;
 const APPROVALS = new Set(["approve-first", "approve"]);
+/** Sidebar G9-2 LOW: actions that let something publish (resume the publisher, record rights, move a queued time) need
+ *  Roy's session too; stopping things (pause on, reject/pull) stays one click away. */
+const ENABLING = (b: { action?: string; on?: boolean }) => b.action === "rights" || b.action === "queue" || (b.action === "pause" && b.on === false);
 const limited = rateLimiter(30, 60_000);
 
 export async function POST(req: Request) {
   const refused = localWriteGuard(req) ?? limited();
   if (refused) return refused;
   const b = (await req.json().catch(() => ({}))) as { action?: string; id?: string; at?: string; note?: string; on?: boolean; state?: string; version?: unknown; nonce?: unknown };
-  if (APPROVALS.has(String(b.action))) {
-    const gate = await requireApprovalSession(req);     // G9-2: session + X-CSRF + origin, before anything is signed
+  if (APPROVALS.has(String(b.action)) || ENABLING(b)) {
+    const gate = await requireApprovalSession(req);     // G9-2: session + X-CSRF + origin, before anything is signed or enabled
     if (!gate.ok) return gate.res;
   }
   const by = "dashboard";

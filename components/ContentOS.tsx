@@ -95,7 +95,7 @@ function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => v
             <div className="flex flex-wrap gap-2 items-center">
               <select value={rights} onChange={(e) => setRights(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]">{RIGHTS_STATES.map((r) => <option key={r} value={r} className="bg-black">{r}</option>)}</select>
               <input value={rightsNote} onChange={(e) => setRightsNote(e.target.value)} placeholder="basis: licence / permission / ownership / PD source / reviewer: name" className="flex-1 bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
-              <button className="chip text-muted" onClick={async () => onMsg(said(await act({ action: "rights", id: c.id, state: rights, note: rightsNote })))}>Record rights</button>
+              <button className="chip text-muted" onClick={async () => onMsg(said(await act({ action: "rights", id: c.id, state: rights, note: rightsNote }, session.csrf)))}>Record rights</button>
             </div>
           </div>
         )}
@@ -132,7 +132,7 @@ function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => v
           <div className="border border-line rounded p-3 flex flex-wrap gap-2 items-center">
             <span className="text-ink text-[12px]">Queued for {c.schedule.publishAt} · approved by {c.approval.by}</span>
             <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink text-[12px]" />
-            <button className="chip text-muted" title="the publish time is part of the approval: moving it sends the item back for two new confirmations" onClick={async () => onMsg(at ? said(await act({ action: "queue", id: c.id, at })) : "pick a time")}>Move (approve again)</button>
+            <button className="chip text-muted" title="the publish time is part of the approval: moving it sends the item back for two new confirmations" onClick={async () => onMsg(at ? said(await act({ action: "queue", id: c.id, at }, session.csrf)) : "pick a time")}>Move (approve again)</button>
             <button className="chip text-offline" onClick={async () => onMsg(said(await act({ action: "reject", id: c.id, note: note || "pulled from queue" })))}>Pull</button>
           </div>
         )}
@@ -186,7 +186,7 @@ export default function ContentOS() {
         <nav className="flex flex-wrap gap-1 ml-2">{VIEWS.map((v) => <button key={v} onClick={() => setView(v)} className={`chip ${view === v ? "text-online" : "text-muted"}`}>{v.toUpperCase()}{v === "approval" && waiting.length ? ` ${waiting.length}` : ""}</button>)}</nav>
         <span className="ml-auto flex items-center gap-2">
           {rep?.paused ? <span className="chip text-offline">PUBLISHING PAUSED</span> : <span className="chip text-online">publishing armed (approved items only)</span>}
-          <button className="chip text-muted" onClick={async () => setMsg(said(await act({ action: "pause", on: !rep?.paused })))}>{rep?.paused ? "Resume" : "Emergency pause"}</button>
+          <button className="chip text-muted" onClick={async () => setMsg(said(await act({ action: "pause", on: !rep?.paused }, session.csrf)))}>{rep?.paused ? "Resume" : "Emergency pause"}</button>
           {msg && <span className="text-muted text-[11px]">{msg}</span>}
         </span>
       </div>

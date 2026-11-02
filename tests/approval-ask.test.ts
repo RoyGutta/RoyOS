@@ -15,7 +15,7 @@ process.env.JARVIS_VOICE_LINE = VL;
 const STATUS = path.join(VL, ".voice_status.json");
 const INBOX = path.join(VL, ".voice_inbox.jsonl");
 let ask: (req: Request) => Promise<Response>;
-let status: () => Promise<Response>;
+let status: (req: Request) => Promise<Response>;
 let fx: ApprovalFixture;
 
 const PHONE = "+15550000001";
@@ -73,7 +73,7 @@ test("Jarvis inbox: with Roy's session an approve is signed apr:<id> into the in
 test("OB-10: GET /api/jarvis shows the outbound review card's fullText unmasked (full recipient and exact text) and masks every other field", async () => {
   for (const tool of ["mcp__jarvis__outbound_review", "outbound_review", "mcp__jarvis__outbound_send"]) {
     writeStatus(card(tool));
-    const j = (await (await status()).json()) as { pendingApproval: Record<string, unknown> | null };
+    const j = (await (await status(get("/api/jarvis", fx.withSession))).json()) as { pendingApproval: Record<string, unknown> | null };
     const p = j.pendingApproval!;
     assert.equal(p.fullText, OUTBOUND_TEXT, `${tool}: fullText verbatim`);
     assert.ok(String(p.fullText).includes(PHONE) && String(p.fullText).includes("+1 555 000 0002"), `${tool}: numbers visible`);
@@ -83,19 +83,28 @@ test("OB-10: GET /api/jarvis shows the outbound review card's fullText unmasked 
   }
 });
 
+test("OB-10 (Sidebar LOW): without Roy's session the outbound card is masked too — no cookie or a forged cookie", async () => {
+  writeStatus(card("mcp__jarvis__outbound_review"));
+  for (const [label, req] of [["no cookie", get("/api/jarvis", BROWSER)], ["forged cookie", get("/api/jarvis", { ...BROWSER, cookie: fx.forgedCookie })]] as const) {
+    const p = ((await (await status(req)).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
+    assert.ok(!String(p.fullText).includes(PHONE) && String(p.fullText).includes("[redacted-phone]"), `${label}: masked`);
+  }
+  writeStatus(null);
+});
+
 test("OB-10: the exception covers only that card — any other tool's fullText is masked, and hosted mode masks the outbound card too", async () => {
   for (const tool of ["mcp__jarvis__telephony_execute", "Bash", "mcp__jarvis__outbound_prepare", "outbound_review_extra", ""]) {
     writeStatus(card(tool));
-    const p = ((await (await status()).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
+    const p = ((await (await status(get("/api/jarvis", fx.withSession))).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
     assert.ok(!String(p.fullText).includes(PHONE) && String(p.fullText).includes("[redacted-phone]"), `${tool || "(no tool)"}: masked`);
     assert.equal(p.target, "[redacted-phone]");
   }
   process.env.JARVIS_HOSTED = "1";
   try {
     writeStatus(card("mcp__jarvis__outbound_review"));
-    const p = ((await (await status()).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
+    const p = ((await (await status(get("/api/jarvis", fx.withSession))).json()) as { pendingApproval: Record<string, unknown> }).pendingApproval;
     assert.ok(!String(p.fullText).includes(PHONE) && String(p.fullText).includes("[redacted-phone]"), "hosted: masked");
   } finally { delete process.env.JARVIS_HOSTED; }
   writeStatus(null);
-  assert.equal(((await (await status()).json()) as { pendingApproval: unknown }).pendingApproval, null);
+  assert.equal(((await (await status(get("/api/jarvis", fx.withSession))).json()) as { pendingApproval: unknown }).pendingApproval, null);
 });

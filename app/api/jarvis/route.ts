@@ -5,6 +5,8 @@ import { readRuns, runSummary, type Run, VOICE_LINE } from "@/lib/jarvis/runs";
 import { buildActivity, buildTurns, type ActivityLine, type JarvisEvent, type Turn } from "@/lib/jarvis/events";
 import { redactApprovalForCard } from "@/lib/jarvis/redact";
 import { isHosted } from "@/lib/continuous/mode";
+import { sessionFromCookieHeader } from "@/lib/continuous/auth";
+import { approvalAuthContext } from "@/lib/jarvis/approvalSession";
 import type { PendingApproval } from "@/lib/jarvis/types";
 export type { PendingApproval } from "@/lib/jarvis/types";
 
@@ -52,7 +54,12 @@ async function readEvents(): Promise<JarvisEvent[]> {
   } catch { return []; }
 }
 
-export async function GET() {
+/** Sidebar G9-2 LOW: the unmasked outbound card text is for Roy's signed-in browser only; anything else gets it masked. */
+async function signedIn(req: Request): Promise<boolean> {
+  try { return !!(await sessionFromCookieHeader(req.headers.get("cookie"), approvalAuthContext(req.headers.get("host")))); } catch { return false; }
+}
+
+export async function GET(req: Request) {
   const [status, events, runs] = await Promise.all([readStatus(), readEvents(), readRuns()]);
   const now = Date.now() / 1000;
   const age = status?.ts ? now - status.ts : null;
@@ -72,7 +79,7 @@ export async function GET() {
   const payload: JarvisPayload = {
     running, state: running ? status?.state ?? "IDLE" : "OFFLINE", detail: status?.detail ?? "", backgroundJobs: status?.background_jobs ?? 0,
     // OB-10: masked like everything else, except the outbound review card's recipients and exact text on Roy's local dashboard
-    pendingApproval: running && status?.pending_approval ? redactApprovalForCard(status.pending_approval, isHosted()) : null, statusAgeSeconds: age === null ? null : Math.round(age),
+    pendingApproval: running && status?.pending_approval ? redactApprovalForCard(status.pending_approval, isHosted() || !(await signedIn(req))) : null, statusAgeSeconds: age === null ? null : Math.round(age),
     brain: "claude-subscription", localModelInLoop: false, resumed,
     lastYou: last?.you ?? null, lastJarvis: last?.jarvis || null,
     turns, activity, actions: activity.filter((a) => a.kind !== "task").map((a) => ({ ts: a.ts, summary: a.summary })).slice(-8),
