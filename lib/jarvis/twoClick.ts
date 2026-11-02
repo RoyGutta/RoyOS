@@ -35,6 +35,14 @@ export function firstClick(scope: string, nowMs = Date.now()): ClickAuth {
   return pack(`first:${scope}:${nonce}:${issuedAt}`, nonce, issuedAt);
 }
 
+/** One signed click for a reversible attestation (Sidebar RC4-1): content rights, resuming the publisher, a launch flag.
+ *  Signs `<scope>:<nonce>:<issuedAt>`; the runtime checks freshness and single use (approval_auth.one_click). */
+export function oneClick(scope: string, nowMs = Date.now()): ClickAuth {
+  const nonce = mintNonce();
+  const issuedAt = Math.floor(nowMs / 1000);
+  return pack(`${scope}:${nonce}:${issuedAt}`, nonce, issuedAt);
+}
+
 /** `bind` is what only click 2 decides, signed with it (content: "|at=<time>"); deploys bind nothing. */
 export function secondClick(scope: string, nonce: string, nowMs = Date.now(), bind = ""): ClickAuth {
   if (!NONCE.test(nonce)) throw new Error("nonce must be 32 hex characters");

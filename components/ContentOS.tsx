@@ -43,6 +43,25 @@ function withOffset(local: string): string | null {
   return `${local}${off >= 0 ? "+" : "-"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
 }
 
+const MANUAL_FLAGS = ["auditSubmitted", "auditPassed", "thumbnailsVerified", "syntheticMediaVerified", "oauthProduction"] as const;
+
+/** Sidebar RC4-1b: a manual launch step is Roy's attestation — recorded with his signed click here, never by a CLI flag. */
+function LaunchFlags({ session, onMsg }: { session: ApprovalSession; onMsg: (m: string) => void }) {
+  const [key, setKey] = useState<string>(MANUAL_FLAGS[0]);
+  const [note, setNote] = useState("");
+  if (session.state !== "signed-in") return <div className="mt-3 flex items-center gap-2 text-[11px] text-muted">Manual steps are recorded here after you do them. <SignInToApprove session={session} next="/content" /></div>;
+  const record = async (on: boolean) => onMsg(said(await act({ action: "launch-flag", key, on, note }, session.csrf)));
+  return (
+    <div className="mt-3 flex flex-wrap gap-2 items-center text-[12px]">
+      <span className="text-muted text-[11px]">Record a manual step after you did it (nothing flips to DONE on its own):</span>
+      <select value={key} onChange={(e) => setKey(e.target.value)} className="bg-transparent border border-line rounded px-2 py-1 text-ink">{MANUAL_FLAGS.map((k) => <option key={k} value={k}>{k}</option>)}</select>
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note (date, what you checked)" className="flex-1 min-w-40 bg-transparent border border-line rounded px-2 py-1 text-ink" />
+      <button className="chip text-online" onClick={() => void record(true)}>Done (I did this)</button>
+      <button className="chip text-muted" onClick={() => void record(false)}>Withdraw</button>
+    </div>
+  );
+}
+
 function Detail({ c, onMsg, session }: { c: ContentItem; onMsg: (m: string) => void; session: ApprovalSession }) {
   const [at, setAt] = useState("");
   const [note, setNote] = useState("");
@@ -230,7 +249,7 @@ export default function ContentOS() {
               <span className="text-muted">{i.detail}</span>
             </div>
           ))}
-          <div className="text-muted text-[11px] mt-3">Manual steps are recorded with <code>content_os.py launch-flag &lt;key&gt; on --note "…"</code> after you do them (keys: auditSubmitted, auditPassed, thumbnailsVerified, syntheticMediaVerified, oauthProduction). Nothing flips to DONE on its own.</div>
+          <LaunchFlags session={session} onMsg={setMsg} />
         </Panel>
       )}
       {view === "history" && <Panel title="Content history" sub="audit log, content actions only">{data.audit.slice().reverse().map((a) => <div key={a.id} className="flex gap-3 text-[12px]"><span className="text-muted tabular-nums shrink-0">{a.at.slice(5, 16)}</span><span className="text-muted">{a.actor}</span><span className="text-ink truncate">{a.action.replace("content_", "")}: {a.result}</span>{a.approval !== "n/a" && <span className="chip text-muted">{a.approval}</span>}</div>)}{data.audit.length === 0 && <div className="text-muted">nothing yet</div>}</Panel>}
