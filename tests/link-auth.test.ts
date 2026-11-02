@@ -60,5 +60,6 @@ test("link request: a nonce is accepted once (durable SET NX), the replay is 409
   assert.equal(replay.ok, false); assert.equal((replay as { status: number }).status, 409);
   const unsigned = await verifyLinkRequest({ ...args, headers: { ...r.headers, sig: "0".repeat(64) }, nonce: undefined } as never);
   assert.equal(unsigned.ok, false, "an unsigned request never claims a nonce");
-  assert.equal(await store.claimNonce(r.nonce.replace(/^./, "f")), true, "other nonces are still free");
+  const other = (r.nonce[0] === "f" ? "e" : "f") + r.nonce.slice(1);           // always a different nonce (Sidebar R-3: was 1 in 16)
+  assert.equal(await store.claimNonce(other), true, "other nonces are still free");
 });
