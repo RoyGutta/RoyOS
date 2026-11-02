@@ -34,7 +34,7 @@ function unb64url(s: string): Uint8Array<ArrayBuffer> | null {
     const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "=");
     const out = new Uint8Array(new ArrayBuffer(bin.length));
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    return b64url(out) === s ? out : null;   // canonical only: the last character's 2 spare bits must be zero (one spelling per cookie)
   } catch { return null; }
 }
 

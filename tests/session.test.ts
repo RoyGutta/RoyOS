@@ -14,6 +14,11 @@ test("session cookie: signs and verifies; tampering with the sid or the signatur
   assert.equal(await verifySessionCookie(`${flippedSid}.${sig}`, key), null);
   const flippedSig = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A");
   assert.equal(await verifySessionCookie(`${s}.${flippedSig}`, key), null);
+  // the last of 43 base64url characters carries 2 spare bits: a spelling that differs only there decodes to the same MAC
+  // bytes and must still be refused (this was the intermittent failure of the flip above, 2026-11-02)
+  const ALPH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const spare = sig.slice(0, -1) + ALPH[ALPH.indexOf(sig[sig.length - 1]) ^ 1];
+  assert.equal(await verifySessionCookie(`${s}.${spare}`, key), null, "non-canonical signature spelling");
   assert.equal(await verifySessionCookie(value, randomHex(32)), null, "another key");
   assert.equal(await verifySessionCookie(s, key), null, "no signature");
   assert.equal(await verifySessionCookie("", key), null);
