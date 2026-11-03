@@ -108,3 +108,24 @@ test("OB-10: the exception covers only that card — any other tool's fullText i
   writeStatus(null);
   assert.equal(((await (await status(get("/api/jarvis", fx.withSession))).json()) as { pendingApproval: unknown }).pendingApproval, null);
 });
+
+test("R13-1: the Jarvis folders are pinned — an .env value elsewhere is refused outside the test runner, and children get no JARVIS_* settings", async () => {
+  const { pinnedPath, childEnv } = await import("../lib/jarvis/runs");
+  const pin = path.join(os.homedir(), "Developer/Jarvis");
+  const E = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
+  assert.equal(pinnedPath("JARVIS_DIR", pin, E({}), false), pin);
+  assert.equal(pinnedPath("JARVIS_DIR", pin, E({ JARVIS_DIR: pin + "/" }), false), pin);                      // the same folder, spelled differently
+  assert.throws(() => pinnedPath("JARVIS_DIR", pin, E({ JARVIS_DIR: "/tmp/planted" }), false), /refusing/);
+  assert.throws(() => pinnedPath("JARVIS_VOICE_LINE", path.join(pin, "voice-line"), E({ JARVIS_VOICE_LINE: path.join(pin, "projects/x") }), false), /refusing/);
+  assert.equal(pinnedPath("JARVIS_DIR", pin, E({ JARVIS_DIR: "/tmp/scratch" }), true), "/tmp/scratch");     // the test runner only
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, { JARVIS_SECRETS_DIR: "/tmp/x", JARVIS_ROUTINES_CONFIG: "/tmp/r.json", JARVIS_AUDIT_FILE: "/tmp/a", UV_CACHE_DIR: "/tmp/u", VIRTUAL_ENV: "/tmp/v", KOKORO_VOICE: "x" });
+    const env = childEnv();
+    for (const k of ["JARVIS_SECRETS_DIR", "JARVIS_ROUTINES_CONFIG", "JARVIS_AUDIT_FILE", "UV_CACHE_DIR", "VIRTUAL_ENV", "KOKORO_VOICE"]) assert.equal(env[k], undefined, k);
+    assert.equal(env.JARVIS_NOT_FOREGROUND, "1");
+    assert.ok(env.PATH?.startsWith(`${process.env.HOME}/.local/bin:`));
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});

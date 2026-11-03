@@ -9,6 +9,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// R13-1: only under the test runner may lib/jarvis/runs.ts follow JARVIS_DIR / JARVIS_VOICE_LINE to a scratch folder
+globalThis.__ROYOS_TEST_PATHS__ = true;
 const EXT = [".ts", ".tsx", ".mts", ".js", ".mjs"];
 const NEXT_SUBPATHS = new Set(["next/server", "next/headers", "next/navigation"]);
 

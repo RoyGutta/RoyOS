@@ -1,4 +1,4 @@
-import { JARVIS_DIR } from "@/lib/jarvis/runs";
+import { JARVIS_DIR, pinnedPath } from "@/lib/jarvis/runs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -9,8 +9,7 @@ import os from "node:os";
  * The dashboard never writes it: every mutation goes through Jarvis's scoped
  * business_* tools, which is the single audited write path.
  */
-export const BUSINESS_DIR =
-  process.env.JARVIS_BUSINESS_DIR?.trim() || path.join(JARVIS_DIR, "business");   // the live store voice-line/business.py writes (never the iCloud twin)
+export const BUSINESS_DIR = pinnedPath("JARVIS_BUSINESS_DIR", path.join(JARVIS_DIR, "business"));   // the live store voice-line/business.py writes (never the iCloud twin); R13-1
 const STORE = path.join(BUSINESS_DIR, "business.json");
 
 export const LEAD_STAGES = ["PROSPECT", "CONTACTED", "REPLIED", "QUALIFIED", "CALL", "PROPOSAL", "WON", "DELIVERY", "RETAINER"] as const;
