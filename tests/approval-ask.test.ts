@@ -129,3 +129,23 @@ test("R13-1: the Jarvis folders are pinned — an .env value elsewhere is refuse
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
   }
 });
+
+test("R14-1: dev, build and start refuse while a mode .env file, a code-loading NODE_OPTIONS, .npmrc node-options, instrumentation or pages/ exists", async () => {
+  const { hookGuard: guard } = await import("../next.config.mjs");
+  const hookGuard = (r: string, o: Record<string, string>) => guard(r, o as unknown as NodeJS.ProcessEnv);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "r14-"));
+  try {
+    assert.deepEqual(hookGuard(root, {}), []);
+    fs.writeFileSync(path.join(root, ".env"), "X=1\n"); fs.writeFileSync(path.join(root, ".env.local"), "X=1\n");
+    fs.writeFileSync(path.join(root, ".env.example"), "X=\n");
+    assert.deepEqual(hookGuard(root, { NODE_OPTIONS: "--max-old-space-size=4096" }), []);              // allowed
+    for (const f of [".env.development", ".env.development.local", ".env.production", ".env.production.local", ".env.test.local", "instrumentation.ts", ".npmrc"]) {
+      fs.writeFileSync(path.join(root, f), f === ".npmrc" ? "node-options=--import=./x.mjs\n" : "NODE_OPTIONS=--import=./x.mjs\n");
+      assert.equal(hookGuard(root, {}).length, 1, f);
+      fs.rmSync(path.join(root, f));
+    }
+    fs.mkdirSync(path.join(root, "pages")); assert.equal(hookGuard(root, {}).length, 1); fs.rmSync(path.join(root, "pages"), { recursive: true });
+    for (const o of ["--import=./tests/x.mjs", "--require ./x.js", "-r ./x.js", "--loader ./l.mjs", "--max-old-space-size=4096 --import ./x.mjs"])
+      assert.equal(hookGuard(root, { NODE_OPTIONS: o }).length, 1, o);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
