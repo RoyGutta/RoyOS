@@ -66,9 +66,10 @@ export async function POST(req: Request) {
     if (ext === ".xlsx" && !isZip) return NextResponse.json({ ok: false, error: "not an xlsx file (bad signature)" }, { status: 415 });
     if (ext !== ".xlsx" && (isZip || bytes.subarray(0, 8192).includes(0))) return NextResponse.json({ ok: false, error: "text upload contains binary data" }, { status: 415 });
     await fs.writeFile(saved, bytes);
+    // R11-1: -I keeps the project folder (writable by Jarvis's sandboxed shell) and PYTHON* variables off the ingester's sys.path
     const env = { ...childEnv(), PATH: `${os.homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` };  // allowlisted + JARVIS_NOT_FOREGROUND=1; no secrets reach the ingester
     const r = await new Promise<{ ok: boolean; out: string }>((resolve) => {
-      execFile("uv", ["run", "--project", VOICE_LINE, "python", "cli.py", "ingest", saved, "--out", path.join(OUTPUT, name)], { cwd: PROJECT, env, timeout: 300_000, maxBuffer: 2_000_000 },
+      execFile("uv", ["run", "--project", VOICE_LINE, "python", "-I", "cli.py", "ingest", saved, "--out", path.join(OUTPUT, name)], { cwd: PROJECT, env, timeout: 300_000, maxBuffer: 2_000_000 },
         (err, stdout, stderr) => resolve({ ok: !err, out: ((stdout || "") + (stderr || "")).slice(-600) }));
     });
     return NextResponse.json({ ok: r.ok, name: r.ok ? name : undefined, log: r.out }, { status: r.ok ? 200 : 409 });
